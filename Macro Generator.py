@@ -14,9 +14,19 @@ from dataclasses import dataclass, field
 from typing import List
 from urllib.request import Request, urlopen
 
-VERSAO = "0.01.4.4" #0-Versão oficial lançada.01-Versão funcional lançada.4-versão De teste lançada.2-Versão de correção#
+VERSAO = "0.01.4.5" #0-Versão oficial lançada.01-Versão funcional lançada.4-versão De teste lançada.5-Versão de correção#
 
 RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
+
+
+# ============================================================
+# Autou-Updater
+# ============================================================
+# Feito no emproviso, mas funciona bem. Foi feito depois do programa original então ficou meio nhe.
+#
+# vai pegar a versao mais recente do github, e se for maior que a atual, vai baixar o arquivo e substituir o executavel.
+# não é para acontecer. mas avezes o WinDefender pode dar flag de falso positivo. MAAAAs, eu te garanto que é de boa.
+# ============================================================
 
 
 def parse_version(version: str) -> tuple[int, ...] | None:
@@ -245,6 +255,8 @@ def update_frozen_app() -> bool:
         except OSError:
             pass
         return False
+# ====================================================================================================================================================================================
+
 
 # ============================================================
 # Roll20 Macro Builder
