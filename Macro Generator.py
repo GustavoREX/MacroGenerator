@@ -1,26 +1,264 @@
 import ast
+import hashlib
+import json
+import os
+import queue
 import re
+import subprocess
+import sys
+import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 from dataclasses import dataclass, field
 from typing import List
+from urllib.request import Request, urlopen
 
+VERSAO = "0.01.4.4" #0-Versão oficial lançada.01-Versão funcional lançada.4-versão De teste lançada.2-Versão de correção#
+
+RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
+
+
+def parse_version(version: str) -> tuple[int, ...] | None:
+    if not re.fullmatch(r"\d+(?:\.\d+)+", version):
+        return None
+    return tuple(int(part) for part in version.split("."))
+
+
+def update_frozen_app() -> bool:
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return False
+
+    events = queue.Queue()
+    executable_path = os.path.abspath(sys.executable)
+    executable_folder = os.path.dirname(executable_path)
+    downloaded_file = None
+    install_requested = False
+
+    def check_for_update():
+        try:
+            request = Request(RELEASE_API_URL, headers={"User-Agent": "MacroGenerator-Updater"})
+            with urlopen(request, timeout=10) as response:
+                release = json.load(response)
+
+            current_version = parse_version(VERSAO)
+            asset = next(
+                (
+                    item for item in release.get("assets", [])
+                    if re.search(r"\.V(\d+(?:\.\d+)+)\.exe$", item.get("name", ""), re.IGNORECASE)
+                ),
+                None,
+            )
+            if not current_version or not asset:
+                events.put(("finished", ("error", "Não foi possível ler a versão da release.")))
+                return
+
+            version_match = re.search(r"\.V(\d+(?:\.\d+)+)\.exe$", asset["name"], re.IGNORECASE)
+            latest_version = parse_version(version_match.group(1)) if version_match else None
+            if not latest_version or latest_version <= current_version:
+                events.put(("finished", "current"))
+                return
+
+            events.put(("available", asset, version_match.group(1)))
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+            events.put(("finished", ("error", str(error))))
+
+    def download_update(asset):
+        temporary_path = None
+        try:
+            final_path = os.path.join(executable_folder, asset["name"])
+            temporary_path = final_path + ".download"
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
+
+            events.put(("download", asset.get("size", 0), asset["name"]))
+            digest = hashlib.sha256()
+            downloaded = 0
+            request = Request(asset["browser_download_url"], headers={"User-Agent": "MacroGenerator-Updater"})
+            with urlopen(request, timeout=60) as response, open(temporary_path, "wb") as output:
+                while chunk := response.read(256 * 1024):
+                    output.write(chunk)
+                    digest.update(chunk)
+                    downloaded += len(chunk)
+                    events.put(("progress", downloaded))
+
+            expected_digest = asset.get("digest", "")
+            if expected_digest.startswith("sha256:"):
+                if digest.hexdigest().lower() != expected_digest.removeprefix("sha256:").lower():
+                    raise ValueError("A verificação do arquivo baixado falhou.")
+            elif downloaded != asset.get("size", downloaded):
+                raise ValueError("O download do arquivo ficou incompleto.")
+
+            events.put(("finished", ("update", temporary_path, final_path)))
+            temporary_path = None
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+            events.put(("finished", ("error", str(error))))
+        finally:
+            if temporary_path and os.path.exists(temporary_path):
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+
+    window = tk.Tk()
+    window.title("Macro Generator - Atualizador")
+    window.geometry("410x155")
+    window.resizable(False, False)
+    window.attributes("-topmost", True)
+
+    status_label = ttk.Label(window, text="Iniciando verificação...", anchor="center")
+    status_label.pack(fill="x", padx=18, pady=(18, 10))
+    progress_bar = ttk.Progressbar(window, mode="indeterminate", maximum=100)
+    progress_bar.pack(fill="x", padx=18, pady=(0, 10))
+    progress_bar.start(12)
+    button_frame = ttk.Frame(window)
+    button_frame.pack(fill="x", padx=18, pady=(0, 14))
+
+    def close_updater(install=False):
+        nonlocal install_requested
+        install_requested = install
+        window.destroy()
+
+    install_button = ttk.Button(
+        button_frame,
+        text="Instalar e reiniciar",
+        command=lambda: close_updater(install=True),
+    )
+    later_button = ttk.Button(
+        button_frame,
+        text="Agora não",
+        command=close_updater,
+    )
+
+    def begin_download(asset):
+        status_label.configure(text=f"Baixando {asset['name']}...")
+        progress_bar.stop()
+        progress_bar.configure(
+            mode="determinate",
+            maximum=max(asset.get("size", 0), 1),
+            value=0,
+        )
+        threading.Thread(target=download_update, args=(asset,), daemon=True).start()
+
+    def center_window():
+        window.update_idletasks()
+        x = (window.winfo_screenwidth() - window.winfo_width()) // 2
+        y = (window.winfo_screenheight() - window.winfo_height()) // 2
+        window.geometry(f"+{x}+{y}")
+
+    def check_events():
+        nonlocal downloaded_file
+        try:
+            while True:
+                event = events.get_nowait()
+                if event[0] == "available":
+                    _, asset, latest_version = event
+                    progress_bar.stop()
+                    progress_bar.configure(mode="determinate", value=0)
+                    should_download = messagebox.askyesno(
+                        "Atualização disponível",
+                        f"A versão {latest_version} está disponível.\n\nDeseja baixar agora?",
+                        parent=window,
+                    )
+                    if should_download:
+                        begin_download(asset)
+                    else:
+                        status_label.configure(text="Download cancelado. Abrindo a versão atual...")
+                        window.after(500, window.destroy)
+                        return
+                elif event[0] == "download":
+                    _, total_size, file_name = event
+                    status_label.configure(text=f"Baixando {file_name}")
+                    progress_bar.stop()
+                    progress_bar.configure(mode="determinate", maximum=max(total_size, 1), value=0)
+                elif event[0] == "progress":
+                    progress_bar.configure(value=event[1])
+                elif event[0] == "finished":
+                    result = event[1]
+                    if isinstance(result, tuple) and result[0] == "update":
+                        downloaded_file = result[1:]
+                        status_label.configure(
+                            text="Download concluído. Instalar e reiniciar o programa?"
+                        )
+                        progress_bar.configure(value=progress_bar.cget("maximum"))
+                        install_button.pack(side="left", expand=True, padx=(0, 6))
+                        later_button.pack(side="left", expand=True, padx=(6, 0))
+                        return
+                    else:
+                        if result == "current":
+                            status_label.configure(text="Versão atualizada. Abrindo programa...")
+                        else:
+                            status_label.configure(text="Falha ao atualizar. Abrindo a versão atual...")
+                        window.after(500, window.destroy)
+                    return
+        except queue.Empty:
+            pass
+        window.after(100, check_events)
+
+    center_window()
+    window.protocol("WM_DELETE_WINDOW", close_updater)
+    status_label.configure(text="Verificando versão...")
+    threading.Thread(target=check_for_update, daemon=True).start()
+    window.after(100, check_events)
+    window.mainloop()
+
+    if not downloaded_file or not install_requested:
+        if downloaded_file:
+            try:
+                os.remove(downloaded_file[0])
+            except OSError:
+                pass
+        return False
+
+    temporary_path, new_executable_path = downloaded_file
+
+    def quote_powershell(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue; "
+        "try { "
+        f"Move-Item -LiteralPath {quote_powershell(temporary_path)} "
+        f"-Destination {quote_powershell(new_executable_path)} -Force "
+        "} catch { "
+        f"if (Test-Path -LiteralPath {quote_powershell(executable_path)}) "
+        f"{{ Start-Process -FilePath {quote_powershell(executable_path)} }}; exit "
+        "}; "
+        "try { "
+        f"Start-Process -FilePath {quote_powershell(new_executable_path)} "
+        "} catch { "
+        f"if (Test-Path -LiteralPath {quote_powershell(executable_path)}) "
+        f"{{ Start-Process -FilePath {quote_powershell(executable_path)} }}; exit "
+        "}; "
+        f"if ({quote_powershell(executable_path)} -ne {quote_powershell(new_executable_path)}) "
+        f"{{ Remove-Item -LiteralPath {quote_powershell(executable_path)} -Force -ErrorAction SilentlyContinue }}"
+    )
+    try:
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-Command", script],
+        )
+        return True
+    except OSError:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+        return False
 
 # ============================================================
-# Roll20 Macro Builder - V1
+# Roll20 Macro Builder
 # ============================================================
 # Gerador simples e extensível de macros de ataque para Roll20.
 #
-# A ideia desta V1 é permitir montar macros sem precisar digitar
-# manualmente os comandos mais comuns.
+# A ideia é permitir montar macros sem precisar digitar
+# manualmente os comandos mais comuns, e auxiliar nos mais complexos.
 # ============================================================
 
 
 # ------------------------------------------------------------
 # Biblioteca geral de atributos da ficha
 # ------------------------------------------------------------
-
 ATTRIBUTES = {
     "Força": "@{for_mod}",
     "Destreza": "@{des_mod}",
@@ -526,7 +764,7 @@ class MacroBuilderApp:
 
         ttk.Label(
             header,
-            text="V0.01.3.1", #0-Versão oficial lançada.01-Versão funcional lançada.3-versão De teste lançada.0-Versão de correção#
+            text= "V"+VERSAO,
             style="Small.TLabel"
         ).pack(side="left", padx=(12, 0))
 
@@ -2345,6 +2583,9 @@ class MacroBuilderApp:
 
 
 def main():
+    if update_frozen_app():
+        return
+
     root = tk.Tk()
     app = MacroBuilderApp(root)
     root.mainloop()
