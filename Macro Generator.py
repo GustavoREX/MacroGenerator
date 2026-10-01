@@ -16,7 +16,7 @@ from typing import List
 from urllib.request import Request, urlopen
 
 
-VERSAO = "0.01.4.5"  # 0-Versão oficial. 01-Versão funcional. 4-Teste. 5-Correção.
+VERSAO = "0.01.5.0"  # 0-Versão oficial. 01-Versão funcional. 5-Teste. 0-Correção.
 
 RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
 
@@ -556,6 +556,48 @@ ATTRIBUTES = {
     "Inteligência": "@{int_mod}",
     "Sabedoria": "@{sab_mod}",
     "Carisma": "@{car_mod}",
+}
+COMMON_WEAPONS = {
+    "Arco Longo": {
+        "threat": "20",
+        "skill": "Pontaria",
+        "damage": "1d8",
+        "attributes": (),
+        "critical_multiplier": "3",
+        "damage_type": "Perfurante",
+    },
+    "Espada Longa": {
+        "threat": "19",
+        "skill": "Luta",
+        "damage": "?{estilo|uma mão,1d8|duas mãos,1d10}",
+        "attributes": ("Força",),
+        "critical_multiplier": "2",
+        "damage_type": "Corte",
+    },
+    "Machado de Guerra": {
+        "threat": "20",
+        "skill": "Luta",
+        "damage": "1d12",
+        "attributes": ("Força",),
+        "critical_multiplier": "3",
+        "damage_type": "Corte",
+    },
+    "Martelo de Guerra": {
+        "threat": "20",
+        "skill": "Luta",
+        "damage": "1d8",
+        "attributes": ("Força",),
+        "critical_multiplier": "3",
+        "damage_type": "Esmagamento",
+    },
+    "Montante": {
+        "threat": "19",
+        "skill": "Luta",
+        "damage": "2d6",
+        "attributes": ("Força",),
+        "critical_multiplier": "2",
+        "damage_type": "Corte",
+    },
 }
 GLOBALMODIFIERS = {
     "Bonus de Ataque": "@{ataquetemp}",
@@ -1115,7 +1157,7 @@ class MacroBuilderApp:
         ).pack(anchor="w", pady=(0, 12))
 
         buttons = [
-            ("Atributo da ficha", self.insert_attribute),
+            ("Armas comuns", self.open_common_weapons_dialog),
             ("Calculador de Passos de Dano", self.insert_fixed_bonus),
             ("Pergunta Roll20", self.insert_question),
             ("Botão de macro", self.insert_button),
@@ -2420,41 +2462,60 @@ class MacroBuilderApp:
         entry.focus_set()
         self.update_preview()
 
-    def insert_attribute(self):
-        self.open_attribute_dialog()
-
-    def open_attribute_dialog(self):
+    def open_common_weapons_dialog(self):
         win = tk.Toplevel(self.root)
-        win.title("Atributo da ficha")
-        win.geometry("320x230")
+        win.title("Armas comuns")
+        win.geometry("320x300")
         win.transient(self.root)
         win.grab_set()
 
         ttk.Label(
             win,
-            text="Escolha um atributo:",
+            text="Escolha uma arma:",
             style="Section.TLabel"
-        ).pack(pady=(15, 8))
+        ).pack(anchor="w", padx=15, pady=(15, 8))
 
-        selected = tk.StringVar(value=list(ATTRIBUTES.keys())[0])
+        for weapon_name in COMMON_WEAPONS:
+            ttk.Button(
+                win,
+                text=weapon_name,
+                command=lambda name=weapon_name: self.apply_common_weapon(
+                    name,
+                    win,
+                ),
+            ).pack(fill="x", padx=15, pady=3)
 
-        combo = ttk.Combobox(
-            win,
-            textvariable=selected,
-            values=list(ATTRIBUTES.keys()),
-            state="readonly"
-        )
-        combo.pack(fill="x", padx=20)
+    def apply_common_weapon(self, weapon_name, window):
+        weapon = COMMON_WEAPONS[weapon_name]
 
-        def insert():
-            self.insert_text(ATTRIBUTES[selected.get()])
-            win.destroy()
+        self.attack_name_var.set(weapon_name)
+        self.attack_best_die_var.set("nao")
+        self.attack_roll_var.set("1d20")
+        self.attack_threat_var.set(weapon["threat"])
+        self.attack_attribute_var.set(weapon["skill"])
+        self.damage_var.set(weapon["damage"])
+        self.damage_additional_var.set("")
+        self.critical_repeat_var.set(weapon["critical_multiplier"])
+        self.damage_type_var.set(weapon["damage_type"])
 
-        ttk.Button(
-            win,
-            text="Inserir",
-            command=insert
-        ).pack(pady=15)
+        for attribute, variable in self.damage_attribute_vars.items():
+            variable.set(attribute in weapon["attributes"])
+
+        self.attack_extra_enabled_var.set(False)
+        self.toggle_attack_extra_field()
+        for variable in self.attack_extra_vars:
+            variable.set("")
+
+        self.damage_extra_enabled_var.set(False)
+        self.toggle_damage_extra_field()
+        for variable in self.damage_extra_vars:
+            variable.set("")
+
+        self.damage_exotic_enabled_var.set(False)
+        self.toggle_exotic_dice_field()
+        self.sync_critical_from_damage()
+        self.update_preview()
+        window.destroy()
 
     def insert_fixed_bonus(self):
         win = tk.Toplevel(self.root)
