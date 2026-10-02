@@ -1,5 +1,6 @@
 import ast
 import hashlib
+from html import unescape
 import json
 import os
 import queue
@@ -16,7 +17,7 @@ from typing import List
 from urllib.request import Request, urlopen
 
 
-VERSAO = "0.01.5.0"  # 0-Versão oficial. 01-Versão funcional. 5-Teste. 0-Correção.
+VERSAO = "0.01.7.0"  # 0-Versão oficial. 01-Versão funcional. 5-Teste. 0-Correção.
 
 RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
 
@@ -775,13 +776,24 @@ def simplify_condition_questions(formula: str) -> str:
         pipe = -1
         end = start + 2
         while end < len(formula) and depth:
-            if formula[end] == "|" and depth == 1 and pipe == -1:
+            if formula.startswith("&#124;", end):
+                if depth == 1 and pipe == -1:
+                    pipe = end
+                end += len("&#124;")
+            elif formula.startswith("&#125;", end):
+                depth -= 1
+                end += len("&#125;")
+            elif formula[end] == "|" and depth == 1 and pipe == -1:
                 pipe = end
+                end += 1
             elif formula[end] == "{":
                 depth += 1
+                end += 1
             elif formula[end] == "}":
                 depth -= 1
-            end += 1
+                end += 1
+            else:
+                end += 1
 
         if depth:
             parts.append(formula[start:])
@@ -823,9 +835,9 @@ def build_critical_expression(
 
 def build_roll_expression(formula: str, extra_values: list[str] | None = None) -> str:
     expression = f"[[{formula}]]" if formula else ""
-    extras = "+".join(value for value in (extra_values or []) if value)
+    extras = "".join(value for value in (extra_values or []) if value)
     if expression and extras:
-        return f"{expression}+{extras}"
+        return expression + extras
     return expression or extras
 
 
@@ -1012,6 +1024,7 @@ def split_macro_button_markup(text: str) -> list[tuple[str, str]]:
 class QuestionOption:
     label: str
     value: str
+    wrap_value: bool | None = None
 
 
 @dataclass
@@ -1034,14 +1047,875 @@ def build_condition_question(
 ) -> str:
     parts = [f"?{{{name}"]
     for option in options:
+        label = option.label.strip()
         value = option.value.strip()
-        if value and wrap_values:
+        if not value:
+            parts.append(f"|{label}")
+            continue
+        if value and wrap_values and option.wrap_value is not False:
             value = f"[[{value}]]"
-        elif not value:
-            value = " "
-        parts.append(f"|{option.label},{value}")
+        if label:
+            parts.append(f"|{label},{value}")
+        else:
+            parts.append(f"|{value}")
     parts.append("}")
     return "".join(parts)
+
+
+ADVANCED_QUESTION_ESCAPES = str.maketrans({
+    "|": "&#124;",
+    ",": "&#44;",
+    "{": "&#123;",
+    "}": "&#125;",
+    "&": "&#38;",
+    "=": "&#61;",
+    "(": "&#40;",
+    ")": "&#41;",
+    "[": "&#91;",
+    "]": "&#93;",
+})
+
+
+def build_advanced_question_value(
+    name: str,
+    options: List[QuestionOption],
+) -> str:
+    parts = [f"?{{{name.translate(ADVANCED_QUESTION_ESCAPES)}"]
+    for option in options:
+        label = option.label.translate(ADVANCED_QUESTION_ESCAPES)
+        value = option.value.translate(ADVANCED_QUESTION_ESCAPES)
+        if not value.strip():
+            parts.append(f"&#124;{label}")
+        elif label.strip():
+            parts.append(f"&#124;{label}&#44;{value}")
+        else:
+            parts.append(f"&#124;{value}")
+    parts.append("&#125;")
+    return "".join(parts)
+
+
+def _split_roll20_parts(text: str, separator: str) -> list[str]:
+    parts = []
+    start = 0
+    index = 0
+    nested_depth = 0
+
+    while index < len(text):
+        if text.startswith("?{", index):
+            nested_depth += 1
+            index += 2
+        elif text.startswith("&#125;", index) and nested_depth:
+            nested_depth -= 1
+            index += len("&#125;")
+        elif text[index] == "}" and nested_depth:
+            nested_depth -= 1
+            index += 1
+        elif text.startswith("&#123;", index):
+            index += len("&#123;")
+        elif text[index] == "{" and nested_depth:
+            nested_depth += 1
+            index += 1
+        elif nested_depth == 0 and text.startswith(separator, index):
+            parts.append(text[start:index])
+            index += len(separator)
+            start = index
+        else:
+            index += 1
+
+    parts.append(text[start:])
+    return parts
+
+
+def infer_named_condition_option(value: str, numeric_label_width: int = 1):
+    value = value.strip()
+    if not value:
+        return "x", ""
+
+    first_digit = re.search(r"\d", value)
+    if first_digit and first_digit.start() > 0:
+        label = value[:first_digit.start()].strip()
+        option_value = value[first_digit.start():].strip()
+        if label and re.match(r"\d", option_value):
+            return label, option_value
+
+    if value.isdigit():
+        return "x", value
+
+    dice_match = re.match(r"\d+d\d+", value, flags=re.IGNORECASE)
+    if dice_match:
+        label_width = max(1, min(numeric_label_width, len(value) - 1))
+        remainder = value[label_width:]
+        if re.match(r"\d+d\d+", remainder, flags=re.IGNORECASE):
+            return value[:label_width], remainder
+
+    return "x", value
+
+
+def looks_like_roll20_condition(text: str) -> bool:
+    source = (text or "").strip()
+    source = source.replace("&lbrack;", "&#91;")
+    source = source.replace("&rbrack;", "&#93;")
+    while source.startswith("[") or source.startswith("&#91;"):
+        source = (
+            source[1:]
+            if source.startswith("[")
+            else source[len("&#91;"):]
+        )
+    return bool(
+        re.match(r"^\?\{.*?(?:\||&#124;)", source)
+        or re.match(r"^\?.+?(?:\||&#124;)", source)
+    )
+
+
+def close_advanced_questions_before_outer_pipe(source: str) -> tuple[str, bool]:
+    stack = []
+    repaired = False
+    index = 0
+
+    while index < len(source):
+        if source.startswith("?{", index):
+            stack.append(False)
+            index += 2
+        elif source.startswith("&#124;", index):
+            if stack:
+                stack[-1] = True
+            index += len("&#124;")
+        elif source.startswith("&#125;", index):
+            if stack:
+                stack.pop()
+            index += len("&#125;")
+        elif source.startswith("&#123;", index):
+            index += len("&#123;")
+        elif source[index] == "|" and len(stack) > 1 and stack[-1]:
+            source = source[:index] + "&#125;" + source[index:]
+            stack.pop()
+            index += len("&#125;")
+            repaired = True
+        elif source[index] == "}" and stack:
+            stack.pop()
+            index += 1
+        else:
+            index += 1
+
+    return source, repaired
+
+
+def parse_roll20_question(text: str):
+    source = (text or "").strip()
+    source = source.replace("&lbrack;", "&#91;")
+    source = source.replace("&rbrack;", "&#93;")
+    repaired = False
+
+    if source.startswith("&#91;&#91;"):
+        source = source[len("&#91;&#91;"):]
+        if source.endswith("&#93;&#93;"):
+            source = source[:-len("&#93;&#93;")]
+        elif source.endswith("&#93;"):
+            source = source[:-len("&#93;")]
+            repaired = True
+        else:
+            repaired = True
+    elif source.startswith("&#91;") and source.endswith("&#93;&#93;"):
+        source = source[len("&#91;"):-len("&#93;&#93;")]
+        repaired = True
+    elif source.endswith("&#93;&#93;"):
+        source = source[:-len("&#93;&#93;")]
+        repaired = True
+    elif source.startswith("[["):
+        source = source[2:]
+        if source.endswith("]]" ):
+            source = source[:-2]
+        elif source.endswith("]"):
+            source = source[:-1]
+            repaired = True
+        else:
+            repaired = True
+    elif source.startswith("[") and source.endswith("]]" ):
+        source = source[1:-2]
+        repaired = True
+    elif source.endswith("]]" ):
+        source = source[:-2]
+        repaired = True
+
+    start = source.find("?{")
+    if start == -1:
+        missing_opening = re.match(r"^\?([^|]+)(\||&#124;)", source)
+        if not missing_opening:
+            return None
+        source = "?{" + source[1:]
+        start = 0
+        repaired = True
+
+    if source[:start].strip():
+        return None
+
+    source, closed_advanced = close_advanced_questions_before_outer_pipe(
+        source[start:]
+    )
+    start = 0
+    repaired = repaired or closed_advanced
+
+    depth = 1
+    index = start + 2
+    body_end = len(source)
+    closed = False
+    while index < len(source):
+        if source.startswith("?{", index):
+            depth += 1
+            index += 2
+        elif source.startswith("&#125;", index):
+            depth -= 1
+            if depth == 0:
+                body_end = index
+                index += len("&#125;")
+                closed = True
+                break
+            index += len("&#125;")
+        elif source[index] == "{":
+            depth += 1
+            index += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                body_end = index
+                index += 1
+                closed = True
+                break
+            index += 1
+        else:
+            index += 1
+
+    if not closed:
+        source += "}" * depth
+        body_end = len(source) - 1
+        index = len(source)
+        closed = True
+        repaired = True
+
+    if source[index:].strip():
+        return None
+
+    body = source[start + 2:body_end]
+    pipe_parts = _split_roll20_parts(body, "|")
+    if len(pipe_parts) == 1:
+        pipe_parts = _split_roll20_parts(body, "&#124;")
+    if len(pipe_parts) == 1 and "," in body:
+        comma_parts = _split_roll20_parts(body, ",")
+        if len(comma_parts) > 1:
+            pipe_parts = [
+                comma_parts[0],
+                ",".join(comma_parts[1:]),
+            ]
+        repaired = True
+
+    if len(pipe_parts) > 1:
+        first_option_parts = _split_roll20_parts(pipe_parts[0], ",")
+        if len(first_option_parts) == 1:
+            first_option_parts = _split_roll20_parts(
+                pipe_parts[0],
+                "&#44;",
+            )
+        if len(first_option_parts) > 1:
+            condition_name = first_option_parts[0].strip()
+            first_value = ",".join(first_option_parts[1:]).strip()
+            if condition_name and first_value:
+                pipe_parts = [
+                    condition_name,
+                    f"x,{first_value}",
+                    *pipe_parts[1:],
+                ]
+                repaired = True
+
+    name = pipe_parts[0].strip()
+    if not name:
+        return None
+
+    named_option_labels = []
+    for part in pipe_parts[1:]:
+        named_parts = _split_roll20_parts(part, ",")
+        if len(named_parts) == 1:
+            named_parts = _split_roll20_parts(part, "&#44;")
+        if len(named_parts) > 1 and named_parts[0].strip():
+            named_option_labels.append(named_parts[0].strip())
+
+    numeric_label_width = max(
+        (
+            len(label)
+            for label in named_option_labels
+            if label.isdigit()
+        ),
+        default=1,
+    )
+
+    options = []
+    for part in pipe_parts[1:]:
+        comma_parts = _split_roll20_parts(part, ",")
+        if len(comma_parts) == 1:
+            comma_parts = _split_roll20_parts(part, "&#44;")
+        if len(comma_parts) == 1:
+            value = part.strip()
+            if named_option_labels:
+                label, option_value = infer_named_condition_option(
+                    value,
+                    numeric_label_width,
+                )
+                options.append(QuestionOption(label, option_value))
+                repaired = True
+            else:
+                options.append(QuestionOption(value, ""))
+            continue
+
+        label = comma_parts[0].strip()
+        value = ",".join(comma_parts[1:]).strip()
+        if not label:
+            repaired = True
+            continue
+
+        if len(comma_parts) >= 3:
+            first_value = comma_parts[1].strip()
+            remaining_values = [part.strip() for part in comma_parts[2:]]
+            dice_match = re.search(
+                r"\d+d\d+",
+                first_value,
+                flags=re.IGNORECASE,
+            )
+            if not dice_match:
+                numeric_label_match = re.fullmatch(
+                    r"(\d+)([^\d,]+)",
+                    first_value,
+                )
+                if numeric_label_match:
+                    options.append(
+                        QuestionOption(label, numeric_label_match.group(1))
+                    )
+                    options.append(
+                        QuestionOption(
+                            numeric_label_match.group(2).strip(),
+                            ",".join(remaining_values),
+                        )
+                    )
+                    repaired = True
+                    continue
+            if dice_match:
+                first_roll = first_value[:dice_match.end()].strip()
+                next_label = first_value[dice_match.end():].strip()
+                if (
+                    first_roll
+                    and next_label
+                    and re.fullmatch(r"[^\d,]+", next_label)
+                    and all(remaining_values)
+                ):
+                    options.append(QuestionOption(label, first_roll))
+                    options.append(
+                        QuestionOption(
+                            next_label,
+                            ",".join(remaining_values),
+                        )
+                    )
+                    repaired = True
+                    continue
+
+            next_value = ",".join(remaining_values)
+            if (
+                first_value.isdigit()
+                and re.match(r"\d+d\d+", next_value, flags=re.IGNORECASE)
+            ):
+                if len(first_value) > 1:
+                    first_option_value = first_value[:-1]
+                    next_label = first_value[-1]
+                else:
+                    first_option_value = first_value
+                    next_label = "x"
+                options.append(
+                    QuestionOption(label, first_option_value)
+                )
+                options.append(
+                    QuestionOption(next_label, next_value)
+                )
+                repaired = True
+                continue
+
+            if (
+                first_value.isdigit()
+                and len(first_value) > 1
+                and all(value.isdigit() for value in remaining_values)
+            ):
+                options.append(
+                    QuestionOption(label, first_value[:-1])
+                )
+                options.append(
+                    QuestionOption(
+                        first_value[-1],
+                        ",".join(remaining_values),
+                    )
+                )
+                repaired = True
+                continue
+
+            if first_value and all(remaining_values):
+                options.append(QuestionOption(label, first_value))
+                options.append(
+                    QuestionOption(
+                        "x",
+                        ",".join(remaining_values),
+                    )
+                )
+                repaired = True
+                continue
+
+        left_brackets = len(value) - len(value.lstrip("["))
+        right_brackets = len(value) - len(value.rstrip("]"))
+        if left_brackets or right_brackets:
+            if left_brackets >= 2 and right_brackets >= 2:
+                value = value[2:-2].strip()
+            else:
+                value = value[left_brackets:len(value) - right_brackets if right_brackets else None].strip()
+                repaired = True
+
+        options.append(QuestionOption(label, value))
+
+    return name, options, repaired
+
+
+def extract_roll20_question_names(text: str) -> list[str]:
+    names = []
+    for component in split_roll20_components(text):
+        parsed = parse_roll20_question(component)
+        if not parsed:
+            continue
+
+        name, options, _ = parsed
+        names.append(unescape(name).strip().casefold())
+        for option in options:
+            names.extend(extract_roll20_question_names(option.value))
+    return [name for name in names if name]
+
+
+def split_roll20_components(expression: str) -> list[str]:
+    expression, _ = close_advanced_questions_before_outer_pipe(expression)
+    components = []
+    start = 0
+    index = 0
+    question_depth = 0
+    roll_depth = 0
+
+    while index < len(expression):
+        if question_depth and expression.startswith("+?{", index):
+            component = expression[start:index].strip()
+            if component:
+                components.append(component)
+            index += 1
+            start = index
+            question_depth = 0
+            roll_depth = 0
+        elif expression.startswith("?{", index):
+            question_depth += 1
+            index += 2
+        elif expression.startswith("&#125;", index) and question_depth:
+            question_depth -= 1
+            index += len("&#125;")
+        elif expression[index] == "}" and question_depth:
+            question_depth -= 1
+            index += 1
+        elif not question_depth and expression.startswith("[[", index):
+            roll_depth += 1
+            index += 2
+        elif not question_depth and expression.startswith("]]", index) and roll_depth:
+            roll_depth -= 1
+            index += 2
+        elif not question_depth and not roll_depth and expression[index] == "+":
+            component = expression[start:index].strip()
+            if component:
+                components.append(component)
+            index += 1
+            start = index
+        else:
+            index += 1
+
+    component = expression[start:].strip()
+    if component:
+        components.append(component)
+    return components
+
+
+def _read_macro_template_group(text: str, cursor: int, name: str):
+    prefix = f"{{{{{name}="
+    if not text.startswith(prefix, cursor):
+        return None
+
+    value_start = cursor + len(prefix)
+    index = value_start
+    brace_depth = 0
+    while index < len(text):
+        if brace_depth == 0 and text.startswith("}}", index):
+            return text[value_start:index], index + 2
+        if text.startswith("&#125;", index) and brace_depth:
+            brace_depth -= 1
+            index += len("&#125;")
+        elif text.startswith("&#123;", index):
+            index += len("&#123;")
+        elif text[index] == "{":
+            brace_depth += 1
+            index += 1
+        elif text[index] == "}" and brace_depth:
+            brace_depth -= 1
+            index += 1
+        else:
+            index += 1
+    return None
+
+
+def _read_bracketed_roll(text: str, cursor: int = 0):
+    if not text.startswith("[[", cursor):
+        return None
+
+    index = cursor + 2
+    roll_depth = 1
+    question_depth = 0
+    while index < len(text):
+        if text.startswith("?{", index):
+            question_depth += 1
+            index += 2
+        elif text.startswith("&#125;", index) and question_depth:
+            question_depth -= 1
+            index += len("&#125;")
+        elif text[index] == "}" and question_depth:
+            question_depth -= 1
+            index += 1
+        elif not question_depth and text.startswith("[[", index):
+            roll_depth += 1
+            index += 2
+        elif not question_depth and text.startswith("]]", index):
+            roll_depth -= 1
+            if roll_depth == 0:
+                return text[cursor + 2:index], index + 2
+            index += 2
+        else:
+            index += 1
+    return None
+
+
+def _read_roll20_question(text: str, cursor: int = 0):
+    if not text.startswith("?{", cursor):
+        return None
+
+    index = cursor + 2
+    depth = 1
+    while index < len(text):
+        if text.startswith("?{", index):
+            depth += 1
+            index += 2
+        elif text.startswith("&#125;", index):
+            depth -= 1
+            index += len("&#125;")
+            if depth == 0:
+                return text[cursor:index], index
+        elif text[index] == "{":
+            depth += 1
+            index += 1
+        elif text[index] == "}":
+            depth -= 1
+            index += 1
+            if depth == 0:
+                return text[cursor:index], index
+        else:
+            index += 1
+    return None
+
+
+def _normalize_character_attribute_refs(text: str, character_name: str) -> str:
+    if not character_name:
+        return text
+    pattern = (
+        r"@\{"
+        + re.escape(character_name)
+        + r"\|([^{}|]+)\}"
+    )
+    return re.sub(pattern, r"@{\1}", text)
+
+
+def parse_generated_macro(text: str):
+    source = (text or "").strip()
+    prefix = "&{template:t20-attack}"
+    if not source.startswith(prefix):
+        return None
+
+    cursor = len(prefix)
+    character_group = _read_macro_template_group(source, cursor, "character")
+    if not character_group:
+        return None
+    character_value = character_group[0]
+    character_match = re.fullmatch(
+        r"@\{([^{}|]+)\|character_name\}((?:\r?\n.*)?)",
+        character_value,
+        flags=re.DOTALL,
+    )
+    if character_value == "@{character_name}":
+        character_name = ""
+        character_display = ""
+    elif character_match:
+        character_name = character_match.group(1)
+        character_display = character_match.group(2).lstrip("\r\n")
+    else:
+        return None
+    cursor = character_group[1]
+
+    attack_name = _read_macro_template_group(source, cursor, "attackname")
+    if not attack_name:
+        return None
+    fields = {"attackname": attack_name[0]}
+    cursor = attack_name[1]
+
+    for field_name in (
+        "attackroll",
+        "damageroll",
+        "criticaldamageroll",
+        "typeofdamage",
+    ):
+        while cursor < len(source) and source[cursor].isspace():
+            cursor += 1
+        if source.startswith(f"{{{{{field_name}=", cursor):
+            field = _read_macro_template_group(source, cursor, field_name)
+            if not field:
+                return None
+            fields[field_name] = field[0]
+            cursor = field[1]
+
+    while cursor < len(source) and source[cursor].isspace():
+        cursor += 1
+    description_prefix = "{{description="
+    if not source.startswith(description_prefix, cursor):
+        return None
+    description_start = cursor + len(description_prefix)
+    if not source.endswith("}}"):
+        return None
+    fields["description"] = source[description_start:-2]
+    fields["character_name"] = character_name
+    fields["character_display"] = character_display
+    for field_name in ("attackroll", "damageroll", "criticaldamageroll"):
+        if field_name in fields:
+            fields[field_name] = _normalize_character_attribute_refs(
+                fields[field_name],
+                character_name,
+            )
+            fields[field_name] = fields[field_name].replace(
+                "@{Ameaça}",
+                "20",
+            )
+    return fields
+
+
+def _parse_roll_suffix(text: str):
+    values = []
+    cursor = 0
+    while cursor < len(text):
+        while cursor < len(text) and text[cursor].isspace():
+            cursor += 1
+        if cursor == len(text):
+            break
+        if text.startswith("[[", cursor):
+            parsed_roll = _read_bracketed_roll(text, cursor)
+            if not parsed_roll:
+                return None
+            value, cursor = parsed_roll
+            values.append(value)
+        elif text.startswith("?{", cursor):
+            parsed_question = _read_roll20_question(text, cursor)
+            if not parsed_question:
+                return None
+            value, cursor = parsed_question
+            values.append(value)
+        else:
+            return None
+    return values
+
+
+def _parse_damage_or_critical_group(text: str):
+    modifier = f"+{GLOBALMODIFIERS['Concatenaçao de Dano']}"
+    parsed_roll = _read_bracketed_roll(text)
+    if parsed_roll:
+        roll_formula, cursor = parsed_roll
+        if roll_formula.endswith(modifier):
+            base_formula = roll_formula[:-len(modifier)]
+            extras = _parse_roll_suffix(text[cursor:])
+            if extras is None:
+                return None
+            return base_formula, extras
+
+    extras = _parse_roll_suffix(text)
+    if extras is None:
+        return None
+    return "", extras
+
+
+def _get_damage_extra_strings(values: list[str]) -> list[str]:
+    extras = []
+    for value in values:
+        value = value.strip()
+        if not value:
+            continue
+        if value.startswith("?{") and value.endswith("}"):
+            extras.append(value)
+        else:
+            extras.append(f"[[{value}]]")
+    return extras
+
+
+def render_generated_macro(
+    name: str,
+    attack: str,
+    damage: str,
+    critical: str,
+    damage_type: str,
+    description: str,
+    character_display: str = "",
+) -> str:
+    character = "@{character_name}"
+    if character_display:
+        character += f"\n{character_display}"
+    macro = "&{template:t20-attack}"
+    macro += f"{{{{character={character}}}}}"
+    macro += f"{{{{attackname={name}}}}}"
+    if attack:
+        macro += f"{{{{attackroll=[[{attack}]]}}}}"
+    if damage:
+        macro += f"{{{{damageroll={damage}}}}}"
+    if critical:
+        macro += f"{{{{criticaldamageroll={critical}}}}}"
+    if damage_type:
+        macro += f"{{{{typeofdamage={damage_type}}}}}"
+    return macro + f"{{{{description={description}}}}}"
+
+
+def parse_generated_macro_state(text: str):
+    fields = parse_generated_macro(text)
+    if fields is None:
+        return None
+
+    state = {
+        "attack_name": fields["attackname"],
+        "character_display": fields["character_display"],
+        "attack_roll": "",
+        "attack_threat": "",
+        "attack_skill": "",
+        "attack_extras": [],
+        "damage": "",
+        "damage_additional": "",
+        "damage_extras": [],
+        "critical": "",
+        "damage_type": fields.get("typeofdamage", ""),
+        "description": fields["description"],
+    }
+
+    if "attackroll" in fields:
+        parsed_roll = _read_bracketed_roll(fields["attackroll"])
+        modifier = GLOBALMODIFIERS["Concatenaçao de ataque"]
+        if not parsed_roll or parsed_roll[1] != len(fields["attackroll"]):
+            return None
+        attack_formula = parsed_roll[0]
+        attack_temp_suffix = "+@{ataquetemp}"
+        if not attack_formula.endswith(attack_temp_suffix):
+            return None
+        attack_core = attack_formula[:-len(attack_temp_suffix)]
+
+        skill_found = False
+        for skill, marker in PERICIASATACK.items():
+            skill_marker = f"+{marker}"
+            marker_index = attack_core.find(skill_marker)
+            if marker_index != -1:
+                marker_content_start = marker_index + len(skill_marker)
+                bracket_end = attack_core.find("]]", marker_content_start)
+                if bracket_end == -1:
+                    return None
+                condition_modifiers = attack_core[
+                    marker_content_start:bracket_end
+                ].removeprefix("+").split("+")
+                if sorted(condition_modifiers) != sorted((
+                    GLOBALMODIFIERS["Bonus de Condição"],
+                    GLOBALMODIFIERS["Bonus de Condição2"],
+                )):
+                    return None
+
+                state["attack_skill"] = skill
+                base_attack = attack_core[:marker_index]
+                extras_text = attack_core[bracket_end + 2:]
+                if extras_text.startswith("+"):
+                    extras_text = extras_text[1:]
+                elif extras_text:
+                    return None
+                state["attack_extras"] = (
+                    split_roll20_components(extras_text)
+                    if extras_text
+                    else []
+                )
+                skill_found = True
+                break
+
+        if not skill_found:
+            return None
+        threat_match = re.search(r"cs>(\d+)$", base_attack)
+        if threat_match:
+            state["attack_threat"] = threat_match.group(1)
+            base_attack = base_attack[:threat_match.start()]
+        supported_best_die = (
+            "?{melhor dado| Sim,2d20kh1|Não,1d20}"
+        )
+        if base_attack not in (
+            "1d20",
+            BEST_DIE_FORMULA,
+            supported_best_die,
+        ):
+            return None
+        state["attack_roll"] = base_attack
+        if len(state["attack_extras"]) > 3:
+            return None
+
+    if "damageroll" in fields:
+        parsed_damage = _parse_damage_or_critical_group(fields["damageroll"])
+        if parsed_damage is None:
+            return None
+        state["damage"], state["damage_extras"] = parsed_damage
+        if len(state["damage_extras"]) > 3:
+            return None
+
+    if "criticaldamageroll" in fields:
+        parsed_critical = _parse_damage_or_critical_group(
+            fields["criticaldamageroll"]
+        )
+        if parsed_critical is None:
+            return None
+        state["critical"] = parsed_critical[0]
+        expected_critical_extras = [
+            simplify_condition_questions(value)
+            for value in _get_damage_extra_strings(state["damage_extras"])
+        ]
+        actual_critical_extras = [
+            simplify_condition_questions(value)
+            for value in _get_damage_extra_strings(parsed_critical[1])
+        ]
+        if actual_critical_extras != expected_critical_extras:
+            return None
+
+    damage_extra_values = _get_damage_extra_strings(state["damage_extras"])
+    attack = build_attack_expression(
+        state["attack_roll"],
+        state["attack_threat"],
+        state["attack_skill"],
+        state["attack_extras"],
+    )
+    damage = build_damage_expression(
+        state["damage"],
+        damage_extra_values,
+    )
+    critical_extras = [
+        simplify_condition_questions(value)
+        for value in damage_extra_values
+    ]
+    critical = build_critical_expression(
+        state["critical"],
+        critical_extras,
+    )
+    return state
 
 
 @dataclass
@@ -1117,6 +1991,22 @@ class MacroBuilderApp:
         name_entry.pack(side="left", padx=(8, 0))
         name_entry.bind("<KeyRelease>", lambda e: self.update_preview())
 
+        ttk.Label(name_frame, text="Nome exibido:").pack(
+            side="left",
+            padx=(12, 0),
+        )
+        self.character_display_var = tk.StringVar(value="")
+        character_display_entry = ttk.Entry(
+            name_frame,
+            textvariable=self.character_display_var,
+            width=24,
+        )
+        character_display_entry.pack(side="left", padx=(8, 0))
+        character_display_entry.bind(
+            "<KeyRelease>",
+            lambda _event: self.update_preview(),
+        )
+
         # ----------------------------------------------------
         # Corpo principal
         # ----------------------------------------------------
@@ -1161,7 +2051,7 @@ class MacroBuilderApp:
             ("Calculador de Passos de Dano", self.insert_fixed_bonus),
             ("Pergunta Roll20", self.insert_question),
             ("Botão de macro", self.insert_button),
-            ("Código personalizado", self.insert_custom),
+            ("Importe sua Macro", self.insert_custom),
         ]
 
         for text, command in buttons:
@@ -1859,6 +2749,27 @@ class MacroBuilderApp:
             style="Section.TLabel"
         ).pack(anchor="w", pady=(0, 8))
 
+        macro_toolbar = ttk.Frame(parent)
+        macro_toolbar.pack(fill="x", pady=(0, 4))
+        ttk.Button(
+            macro_toolbar,
+            text="Atualizar",
+            command=self.update_preview
+        ).pack(side="left")
+        ttk.Button(
+            macro_toolbar,
+            text="Copiar macro",
+            command=self.copy_macro
+        ).pack(side="left", padx=6)
+
+        self.duplicate_condition_warning_var = tk.StringVar(value="")
+        ttk.Label(
+            parent,
+            textvariable=self.duplicate_condition_warning_var,
+            foreground="#b3261e",
+            wraplength=460,
+        ).pack(anchor="w", fill="x", pady=(0, 4))
+
         preview_split = ttk.PanedWindow(parent, orient="vertical")
         preview_split.pack(fill="both", expand=True)
 
@@ -1919,19 +2830,6 @@ class MacroBuilderApp:
 
         bottom = ttk.Frame(parent)
         bottom.pack(fill="x", pady=(8, 0))
-
-        ttk.Button(
-            bottom,
-            text="Atualizar",
-            command=self.update_preview
-        ).pack(side="left")
-
-        ttk.Button(
-            bottom,
-            text="Copiar macro",
-            command=self.copy_macro
-        ).pack(side="left", padx=6)
-
         ttk.Button(
             bottom,
             text="Limpar",
@@ -2401,32 +3299,71 @@ class MacroBuilderApp:
 
         description = self.get_description()
 
-        macro = (
-            "&{template:t20-attack}"
-            "{{character=@{character_name}}}"
-            f"{{{{attackname={name}}}}}"
+        character_display_var = getattr(self, "character_display_var", None)
+        character_display = (
+            character_display_var.get()
+            if character_display_var is not None
+            else ""
+        )
+        return render_generated_macro(
+            name,
+            attack,
+            damage,
+            critical,
+            damage_type,
+            description,
+            character_display,
         )
 
-        if attack:
-            macro += f"{{{{attackroll=[[{attack}]]}}}}"
+    def update_duplicate_condition_warning(self):
+        warning_var = getattr(
+            self,
+            "duplicate_condition_warning_var",
+            None,
+        )
+        if warning_var is None:
+            return
 
-        if damage:
-            macro += f"{{{{damageroll={damage}}}}}"
+        fields = []
+        if getattr(self, "attack_extra_enabled_var", None) and self.attack_extra_enabled_var.get():
+            fields.extend(getattr(self, "attack_extra_vars", []))
 
-        if critical:
-            macro += f"{{{{criticaldamageroll={critical}}}}}"
+        fields.extend(
+            variable
+            for variable in (
+                getattr(self, "damage_var", None),
+                getattr(self, "damage_additional_var", None),
+            )
+            if variable is not None
+        )
 
-        if damage_type:
-            macro += f"{{{{typeofdamage={damage_type}}}}}"
+        if getattr(self, "damage_extra_enabled_var", None) and self.damage_extra_enabled_var.get():
+            fields.extend(getattr(self, "damage_extra_vars", []))
 
-        macro += f"{{{{description={description}}}}}"
+        seen_names = set()
+        duplicate_found = False
+        for variable in fields:
+            for name in extract_roll20_question_names(variable.get()):
+                if name in seen_names:
+                    duplicate_found = True
+                    break
+                seen_names.add(name)
+            if duplicate_found:
+                break
 
-        return macro
+        warning_var.set(
+            "Aviso: condicionais com a mesma nomenclatura identificadas. "
+            "Tome cuidado, pois apenas o valor da primeira será adicionado "
+            "a rolagem pelo padrão de prioridade do Roll20"
+            if duplicate_found
+            else ""
+        )
 
     def update_preview(self):
         if not hasattr(self, "preview"):
             return
 
+        self.update_duplicate_condition_warning()
         macro = self.build_macro()
 
         self.preview.delete("1.0", "end")
@@ -2630,6 +3567,7 @@ class MacroBuilderApp:
         self.insert_question(
             target_var=self.damage_extra_vars[index],
             conditional=True,
+            wrap_advanced_values=True,
         )
 
     def insert_damage_field_conditional(self, target_var):
@@ -2645,17 +3583,531 @@ class MacroBuilderApp:
             conditional=True,
         )
 
+    def insert_condition_components(
+        self,
+        target_var,
+        wrap_conditional_values,
+        wrap_advanced_values,
+    ):
+        source = target_var.get().strip() if target_var is not None else ""
+        source, recovered_syntax = close_advanced_questions_before_outer_pipe(
+            source
+        )
+        components = []
+        syntax_error = False
+
+        for component_text in split_roll20_components(source):
+            if not looks_like_roll20_condition(component_text):
+                components.append({"type": "fixed", "value": component_text})
+                continue
+
+            parsed = parse_roll20_question(component_text)
+            if parsed is None:
+                syntax_error = True
+                break
+
+            name, options, was_repaired = parsed
+            recovered_syntax = recovered_syntax or was_repaired
+            loaded_options = []
+            for option in options:
+                advanced_data = None
+                if looks_like_roll20_condition(option.value):
+                    nested = parse_roll20_question(option.value)
+                    if nested is None:
+                        syntax_error = True
+                        break
+                    nested_name, nested_options, nested_repaired = nested
+                    recovered_syntax = recovered_syntax or nested_repaired
+                    advanced_data = (
+                        unescape(nested_name),
+                        [
+                            QuestionOption(
+                                unescape(nested_option.label),
+                                unescape(nested_option.value),
+                            )
+                            for nested_option in nested_options
+                        ],
+                    )
+                loaded_options.append((option, advanced_data))
+
+            if syntax_error:
+                break
+            components.append({
+                "type": "condition",
+                "name": name,
+                "options": loaded_options,
+            })
+
+        if syntax_error:
+            components = []
+            status_text = (
+                "Erro de sintaxe da condicional anterior, impossível "
+                "exibir valores originais"
+            )
+        elif recovered_syntax:
+            status_text = (
+                "Sintaxe anterior parcialmente errada, valores corrigidos "
+                "para valores possíveis"
+            )
+        else:
+            status_text = ""
+
+        has_condition = any(
+            component["type"] == "condition"
+            for component in components
+        )
+        if not has_condition:
+            fixed_components = [
+                component
+                for component in components
+                if component["type"] == "fixed"
+            ]
+            components = [{"type": "condition", "name": "Condição", "options": None}]
+            components.extend(fixed_components)
+
+        win = tk.Toplevel(self.root)
+        win.title("Condição")
+        win.geometry("760x620")
+        win.transient(self.root)
+        win.grab_set()
+
+        ttk.Label(
+            win,
+            text="Condicionais e valores adicionais:",
+            style="Section.TLabel",
+        ).pack(anchor="w", padx=15, pady=(15, 4))
+
+        if status_text:
+            ttk.Label(
+                win,
+                text=status_text,
+                foreground="#8a5a00" if recovered_syntax and not syntax_error else "#b3261e",
+                wraplength=720,
+            ).pack(anchor="w", padx=15, pady=(0, 6))
+
+        scroll_frame = ttk.Frame(win)
+        scroll_frame.pack(fill="both", expand=True, padx=15)
+        canvas = tk.Canvas(scroll_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(
+            scroll_frame,
+            orient="vertical",
+            command=canvas.yview,
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        component_frame = ttk.Frame(canvas)
+        canvas_window = canvas.create_window(
+            (0, 0),
+            window=component_frame,
+            anchor="nw",
+        )
+        condition_frame = ttk.Frame(component_frame)
+        condition_frame.pack(fill="x")
+        fixed_section = ttk.Frame(component_frame, padding=(8, 5))
+        fixed_section.pack(fill="x", pady=(4, 0))
+        ttk.Label(
+            fixed_section,
+            text="Valores/dados fora das condicionais:",
+        ).pack(anchor="w")
+        fixed_fields_frame = ttk.Frame(fixed_section)
+        fixed_fields_frame.pack(fill="x", pady=(2, 0))
+        component_frame.bind(
+            "<Configure>",
+            lambda _event: canvas.configure(
+                scrollregion=canvas.bbox("all")
+            ),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(
+                canvas_window,
+                width=event.width,
+            ),
+        )
+
+        editor_components = []
+
+        def add_condition_component(initial=None):
+            condition_number = sum(
+                component["type"] == "condition"
+                for component in editor_components
+            ) + 1
+            content = self.create_toggle_section(
+                condition_frame,
+                f"Condição {condition_number}",
+                expanded=True,
+                pady=(0, 5),
+            )
+            initial_options = initial["options"] if initial else None
+            name_var = tk.StringVar(
+                value=initial["name"] if initial else "Condição"
+            )
+            ttk.Label(content, text="Nome da condição:").pack(anchor="w")
+            ttk.Entry(content, textvariable=name_var).pack(
+                fill="x",
+                pady=(2, 6),
+            )
+            ttk.Label(content, text="Opções (nome = valor):").pack(anchor="w")
+            options_frame = ttk.Frame(content)
+            options_frame.pack(fill="x", pady=(2, 2))
+            rows = []
+
+            def add_row(label="", value="", advanced_data=None):
+                row_container = ttk.Frame(options_frame)
+                row_container.pack(fill="x", pady=2)
+                row = ttk.Frame(row_container)
+                row.pack(fill="x")
+                option_number = len(rows) + 1
+                normal_value = (
+                    f"Valor {option_number}"
+                    if advanced_data is not None
+                    else value
+                )
+                label_var = tk.StringVar(value=label)
+                value_var = tk.StringVar(value=normal_value)
+                normal_value_var = tk.StringVar(value=normal_value)
+                advanced_var = tk.BooleanVar(value=False)
+                advanced_name_var = tk.StringVar(value="Segunda condição")
+                ttk.Entry(
+                    row,
+                    textvariable=label_var,
+                    width=22,
+                ).pack(side="left", fill="x", expand=True)
+                value_entry = ttk.Entry(
+                    row,
+                    textvariable=value_var,
+                    width=18,
+                )
+                value_entry.pack(side="left", padx=(5, 0))
+                advanced_name_entry = ttk.Entry(
+                    row,
+                    textvariable=advanced_name_var,
+                    width=18,
+                )
+                nested_frame = ttk.Frame(row_container)
+                nested_options = []
+                add_button_holder = [None]
+
+                def add_nested_option():
+                    if add_button_holder[0]:
+                        add_button_holder[0].destroy()
+                    nested_row = ttk.Frame(nested_frame)
+                    nested_row.pack(fill="x", pady=(2, 0))
+                    option_number = len(nested_options) + 1
+                    nested_label_var = tk.StringVar(
+                        value=f"Nome {option_number}"
+                    )
+                    nested_value_var = tk.StringVar(
+                        value=f"Valor {option_number}"
+                    )
+                    ttk.Entry(
+                        nested_row,
+                        textvariable=nested_label_var,
+                        width=15,
+                    ).pack(side="left")
+                    ttk.Entry(
+                        nested_row,
+                        textvariable=nested_value_var,
+                        width=15,
+                    ).pack(side="left", padx=(5, 0))
+                    add_button_holder[0] = ttk.Button(
+                        nested_row,
+                        text="+ Campo",
+                        command=add_nested_option,
+                    )
+                    add_button_holder[0].pack(side="left", padx=(5, 0))
+                    nested_options.append(
+                        (nested_label_var, nested_value_var)
+                    )
+
+                add_nested_option()
+                advanced_check = ttk.Checkbutton(
+                    row,
+                    text="Condicional avançada",
+                    variable=advanced_var,
+                    command=lambda: toggle_advanced(),
+                )
+                advanced_check.pack(side="left", padx=(8, 0))
+
+                def toggle_advanced():
+                    if advanced_var.get():
+                        normal_value_var.set(value_var.get())
+                        value_entry.pack_forget()
+                        advanced_name_entry.pack(
+                            side="left",
+                            padx=(5, 0),
+                            before=advanced_check,
+                        )
+                        nested_frame.pack(
+                            fill="x",
+                            padx=(24, 0),
+                            pady=(2, 4),
+                        )
+                    else:
+                        advanced_name_entry.pack_forget()
+                        value_var.set(
+                            normal_value_var.get()
+                            or f"Valor {option_number}"
+                        )
+                        value_entry.pack(
+                            side="left",
+                            padx=(5, 0),
+                            before=advanced_check,
+                        )
+                        nested_frame.pack_forget()
+
+                row_data = {
+                    "label": label_var,
+                    "value": value_var,
+                    "advanced": advanced_var,
+                    "advanced_name": advanced_name_var,
+                    "nested_options": nested_options,
+                }
+                rows.append(row_data)
+                if advanced_data:
+                    advanced_name, advanced_options = advanced_data
+                    advanced_var.set(True)
+                    advanced_name_var.set(advanced_name)
+                    if not advanced_options:
+                        nested_options[0][0].set("")
+                        nested_options[0][1].set("")
+                    for index, nested_option in enumerate(advanced_options):
+                        if index:
+                            add_nested_option()
+                        nested_options[index][0].set(nested_option.label)
+                        nested_options[index][1].set(nested_option.value)
+                    toggle_advanced()
+
+            if initial_options is None:
+                add_row("SIM", "1")
+                add_row("NÃO", "0")
+            else:
+                for option, advanced_data in initial_options:
+                    add_row(option.label, option.value, advanced_data)
+
+            ttk.Button(
+                content,
+                text="+ Adicionar opção",
+                command=add_row,
+            ).pack(anchor="w", pady=(3, 0))
+            component = {
+                "type": "condition",
+                "name": name_var,
+                "rows": rows,
+            }
+            editor_components.append(component)
+            return component
+
+        def add_fixed_component(value=""):
+            fixed_frame = ttk.Frame(fixed_fields_frame)
+            fixed_frame.pack(side="left", padx=(0, 6), pady=(0, 3))
+            value_var = tk.StringVar(value=value)
+            component = {
+                "type": "fixed",
+                "value": value_var,
+            }
+            ttk.Entry(
+                fixed_frame,
+                textvariable=value_var,
+                width=14,
+            ).pack(
+                fill="x",
+            )
+            ttk.Button(
+                fixed_frame,
+                text="X",
+                width=2,
+                command=lambda: remove_fixed_component(
+                    fixed_frame,
+                    component,
+                ),
+            ).pack(side="right", padx=(3, 0))
+            editor_components.append(component)
+
+        def remove_fixed_component(frame, component):
+            frame.destroy()
+            if component in editor_components:
+                editor_components.remove(component)
+
+        for component in components:
+            if component["type"] == "fixed":
+                add_fixed_component(component["value"])
+            else:
+                add_condition_component(component)
+
+        action_frame = ttk.Frame(win)
+        action_frame.pack(fill="x", padx=15, pady=(6, 0))
+        ttk.Button(
+            action_frame,
+            text="+ Adicionar valor fixo/dado",
+            command=add_fixed_component,
+        ).pack(side="left")
+        ttk.Button(
+            action_frame,
+            text="+ Adicionar outra condicional",
+            command=add_condition_component,
+        ).pack(side="left", padx=(6, 0))
+
+        def insert():
+            conditional_components = []
+            fixed_components = []
+            for component in editor_components:
+                if component["type"] == "fixed":
+                    value = component["value"].get().strip()
+                    if value:
+                        fixed_components.append(value)
+                    continue
+
+                name = component["name"].get().strip()
+                if not name:
+                    messagebox.showwarning(
+                        "Condição",
+                        "Digite um nome para a condição.",
+                        parent=win,
+                    )
+                    return
+
+                options = []
+                for row in component["rows"]:
+                    label = row["label"].get().strip()
+                    value = row["value"].get().strip()
+                    if row["advanced"].get():
+                        advanced_name = row["advanced_name"].get().strip()
+                        if not advanced_name:
+                            messagebox.showwarning(
+                                "Condição",
+                                "Digite um nome para a condição avançada.",
+                                parent=win,
+                            )
+                            return
+                        advanced_options = [
+                            QuestionOption(
+                                nested_label.get().strip(),
+                                nested_value.get().strip(),
+                            )
+                            for nested_label, nested_value
+                            in row["nested_options"]
+                        ]
+                        value = build_advanced_question_value(
+                            advanced_name,
+                            advanced_options,
+                        )
+                    options.append(
+                        QuestionOption(
+                            label,
+                            value,
+                            wrap_value=(
+                                wrap_advanced_values
+                                if row["advanced"].get()
+                                else None
+                            ),
+                        )
+                    )
+
+                conditional_components.append(
+                    build_condition_question(
+                        name,
+                        options,
+                        wrap_values=wrap_conditional_values,
+                    )
+                )
+
+            if target_var is not None:
+                target_var.set(
+                    "+".join(conditional_components + fixed_components)
+                )
+                self.update_preview()
+            win.destroy()
+
+        ttk.Button(
+            win,
+            text="Inserir condição",
+            command=insert,
+        ).pack(pady=(6, 12))
+
     def insert_question(
         self,
         target_var=None,
         conditional=False,
         wrap_conditional_values=True,
+        wrap_advanced_values=False,
     ):
+        if conditional:
+            self.insert_condition_components(
+                target_var,
+                wrap_conditional_values,
+                wrap_advanced_values,
+            )
+            return
+
         win = tk.Toplevel(self.root)
         win.title("Condição" if conditional else "Pergunta Roll20")
-        win.geometry("500x430")
+        win.geometry("700x540" if conditional else "650x460")
         win.transient(self.root)
         win.grab_set()
+
+        previous_question = (
+            target_var.get().strip()
+            if conditional and target_var is not None
+            else ""
+        )
+        previous_is_condition = looks_like_roll20_condition(previous_question)
+        parsed_question = (
+            parse_roll20_question(previous_question)
+            if previous_is_condition
+            else None
+        )
+        loaded_options = None
+        recovered_syntax = False
+        status_message = ""
+        if previous_is_condition and parsed_question is None:
+            status_message = (
+                "Erro de sintaxe da condicional anterior, "
+                "impossível exibir valores originais"
+            )
+        elif parsed_question:
+            parsed_name, parsed_options, recovered_syntax = parsed_question
+            loaded_options = []
+            for option in parsed_options:
+                advanced_data = None
+                nested_question = parse_roll20_question(option.value)
+                if looks_like_roll20_condition(option.value):
+                    if nested_question is None:
+                        status_message = (
+                            "Erro de sintaxe da condicional anterior, "
+                            "impossível exibir valores originais"
+                        )
+                        loaded_options = None
+                        break
+                    nested_name, nested_options, nested_recovered = nested_question
+                    recovered_syntax = recovered_syntax or nested_recovered
+                    advanced_data = (
+                        unescape(nested_name),
+                        [
+                            QuestionOption(
+                                unescape(nested.label),
+                                unescape(nested.value),
+                            )
+                            for nested in nested_options
+                        ],
+                    )
+                loaded_options.append((option, advanced_data))
+
+            if loaded_options is not None:
+                name_var = tk.StringVar(value=parsed_name)
+                if recovered_syntax:
+                    status_message = (
+                        "Sintaxe anterior parcialmente errada, valores "
+                        "corrigidos para valores possíveis"
+                    )
+        if status_message and loaded_options is None:
+            name_var = tk.StringVar(value="Condição")
+        elif not parsed_question:
+            name_var = tk.StringVar(
+                value="Condição" if conditional else "Pergunta"
+            )
 
         ttk.Label(
             win,
@@ -2663,7 +4115,17 @@ class MacroBuilderApp:
             style="Section.TLabel"
         ).pack(anchor="w", padx=15, pady=(15, 4))
 
-        name_var = tk.StringVar(value="Condição" if conditional else "Pergunta")
+        if status_message:
+            ttk.Label(
+                win,
+                text=status_message,
+                foreground=(
+                    "#8a5a00"
+                    if loaded_options is not None
+                    else "#b3261e"
+                ),
+                wraplength=660,
+            ).pack(anchor="w", padx=15, pady=(0, 6))
 
         ttk.Entry(
             win,
@@ -2681,12 +4143,24 @@ class MacroBuilderApp:
 
         rows = []
 
-        def add_row(label="", value=""):
-            row = ttk.Frame(options_frame)
-            row.pack(fill="x", pady=2)
+        def add_row(label="", value="", advanced_data=None):
+            row_container = ttk.Frame(options_frame)
+            row_container.pack(fill="x", pady=2)
 
+            row = ttk.Frame(row_container)
+            row.pack(fill="x")
+
+            option_number = len(rows) + 1
+            normal_value = (
+                f"Valor {option_number}"
+                if advanced_data is not None
+                else value
+            )
             label_var = tk.StringVar(value=label)
-            value_var = tk.StringVar(value=value)
+            value_var = tk.StringVar(value=normal_value)
+            normal_value_var = tk.StringVar(value=normal_value)
+            advanced_var = tk.BooleanVar(value=False)
+            advanced_name_var = tk.StringVar(value="Segunda condição")
 
             ttk.Entry(
                 row,
@@ -2694,16 +4168,126 @@ class MacroBuilderApp:
                 width=22
             ).pack(side="left", fill="x", expand=True)
 
-            ttk.Entry(
+            value_entry = ttk.Entry(
                 row,
                 textvariable=value_var,
                 width=18
-            ).pack(side="left", padx=(5, 0))
+            )
+            value_entry.pack(side="left", padx=(5, 0))
 
-            rows.append((label_var, value_var))
+            advanced_name_entry = ttk.Entry(
+                row,
+                textvariable=advanced_name_var,
+                width=18,
+            )
 
-        add_row("SIM", "1")
-        add_row("NÃO", "0")
+            nested_frame = ttk.Frame(row_container)
+            nested_options = []
+            add_button_holder = [None]
+
+            def add_nested_option():
+                if add_button_holder[0]:
+                    add_button_holder[0].destroy()
+
+                nested_row = ttk.Frame(nested_frame)
+                nested_row.pack(fill="x", pady=(2, 0))
+
+                option_number = len(nested_options) + 1
+                nested_label_var = tk.StringVar(
+                    value=f"Nome {option_number}"
+                )
+                nested_value_var = tk.StringVar(
+                    value=f"Valor {option_number}"
+                )
+                ttk.Entry(
+                    nested_row,
+                    textvariable=nested_label_var,
+                    width=15,
+                ).pack(side="left")
+                ttk.Entry(
+                    nested_row,
+                    textvariable=nested_value_var,
+                    width=15,
+                ).pack(side="left", padx=(5, 0))
+
+                add_button_holder[0] = ttk.Button(
+                    nested_row,
+                    text="+ Campo",
+                    command=add_nested_option,
+                )
+                add_button_holder[0].pack(side="left", padx=(5, 0))
+                nested_options.append(
+                    (nested_label_var, nested_value_var)
+                )
+
+            add_nested_option()
+
+            advanced_check = ttk.Checkbutton(
+                row,
+                text="Condicional avançada",
+                variable=advanced_var,
+                command=lambda: toggle_advanced(),
+            )
+            advanced_check.pack(side="left", padx=(8, 0))
+
+            def toggle_advanced():
+                if advanced_var.get():
+                    normal_value_var.set(value_var.get())
+                    value_entry.pack_forget()
+                    advanced_name_entry.pack(
+                        side="left",
+                        padx=(5, 0),
+                        before=advanced_check,
+                    )
+                    nested_frame.pack(
+                        fill="x",
+                        padx=(24, 0),
+                        pady=(2, 4),
+                    )
+                else:
+                    advanced_name_entry.pack_forget()
+                    value_var.set(
+                        normal_value_var.get()
+                        or f"Valor {option_number}"
+                    )
+                    value_entry.pack(
+                        side="left",
+                        padx=(5, 0),
+                        before=advanced_check,
+                    )
+                    nested_frame.pack_forget()
+
+            row_data = {
+                "label": label_var,
+                "value": value_var,
+                "advanced": advanced_var,
+                "advanced_name": advanced_name_var,
+                "nested_options": nested_options,
+            }
+            rows.append(row_data)
+
+            if advanced_data is not None:
+                advanced_name, options = advanced_data
+                advanced_var.set(True)
+                advanced_name_var.set(advanced_name)
+                if not options:
+                    nested_options[0][0].set("")
+                    nested_options[0][1].set("")
+                for index, nested_option in enumerate(options):
+                    if index:
+                        add_nested_option()
+                    nested_options[index][0].set(nested_option.label)
+                    nested_options[index][1].set(nested_option.value)
+                toggle_advanced()
+
+            return row_data
+
+        if loaded_options is None:
+            add_row("SIM", "1")
+            add_row("NÃO", "0")
+        else:
+            for option, advanced_data in loaded_options:
+                add_row(option.label, option.value, advanced_data)
 
         ttk.Button(
             win,
@@ -2715,12 +4299,46 @@ class MacroBuilderApp:
             name = name_var.get().strip()
             options = []
 
-            for label_var, value_var in rows:
-                label = label_var.get().strip()
-                value = value_var.get().strip()
+            for row in rows:
+                label = row["label"].get().strip()
 
                 if label:
-                    options.append(QuestionOption(label, value))
+                    value = row["value"].get().strip()
+                    if row["advanced"].get():
+                        advanced_name = row["advanced_name"].get().strip()
+                        if not advanced_name:
+                            messagebox.showwarning(
+                                "Pergunta Roll20",
+                                "Digite um nome para a condição avançada.",
+                                parent=win,
+                            )
+                            return
+
+                        advanced_options = [
+                            QuestionOption(
+                                nested_label.get().strip(),
+                                nested_value.get().strip(),
+                            )
+                            for nested_label, nested_value
+                            in row["nested_options"]
+                            if nested_label.get().strip()
+                        ]
+                        value = build_advanced_question_value(
+                            advanced_name,
+                            advanced_options,
+                        )
+
+                    options.append(
+                        QuestionOption(
+                            label,
+                            value,
+                            wrap_value=(
+                                wrap_advanced_values
+                                if row["advanced"].get()
+                                else None
+                            ),
+                        )
+                    )
 
             if not name:
                 messagebox.showwarning(
@@ -2807,18 +4425,101 @@ class MacroBuilderApp:
             command=insert
         ).pack(pady=15)
 
+    def load_custom_macro(self, macro_text: str):
+        state = parse_generated_macro_state(macro_text)
+        if state is None:
+            return False
+
+        self.attack_name_var.set(state["attack_name"])
+        self.character_display_var.set(state["character_display"])
+        self.attack_roll_var.set(state["attack_roll"])
+        self.attack_best_die_var.set(
+            "sim"
+            if "2d20kh1" in state["attack_roll"]
+            else "nao"
+        )
+        self.attack_threat_var.set(state["attack_threat"])
+        self.attack_attribute_var.set(state["attack_skill"])
+        for index, variable in enumerate(self.attack_extra_vars):
+            variable.set(
+                state["attack_extras"][index]
+                if index < len(state["attack_extras"])
+                else ""
+            )
+        self.attack_extra_enabled_var.set(bool(state["attack_extras"]))
+        self.toggle_attack_extra_field()
+
+        self.damage_var.set(state["damage"])
+        self.damage_additional_var.set(state["damage_additional"])
+        for variable in self.damage_attribute_vars.values():
+            variable.set(False)
+        for index, variable in enumerate(self.damage_extra_vars):
+            variable.set(
+                state["damage_extras"][index]
+                if index < len(state["damage_extras"])
+                else ""
+            )
+        self.damage_extra_enabled_var.set(bool(state["damage_extras"]))
+        self.toggle_damage_extra_field()
+
+        self.critical_repeat_var.set("1")
+        self.critical_var.set(state["critical"])
+        self.damage_type_var.set(state["damage_type"])
+        self.description_text.delete("1.0", "end")
+        self.description_text.insert("1.0", state["description"])
+        self.update_preview()
+        return True
+
     def insert_custom(self):
         win = tk.Toplevel(self.root)
-        win.title("Código personalizado")
-        win.geometry("600x300")
+        win.title("Importe sua Macro")
+        win.geometry("720x370")
         win.transient(self.root)
         win.grab_set()
 
+        warning = tk.Frame(
+            win,
+            background="#fff3cd",
+            highlightbackground="#d69e00",
+            highlightthickness=1,
+            padx=8,
+            pady=6,
+        )
+        warning.pack(fill="x", padx=15, pady=(14, 10))
+        warning_message = (
+            "Ainda em fase de teste. funciona melhor com codigos do "
+            "porprio programa, mas é possivel importar ataques mais "
+            "basicos e com um pouco de sorte alguns mais complexos"
+        )
+        tk.Label(
+            warning,
+            text="⚠",
+            font=("Segoe UI Symbol", 14, "bold"),
+            foreground="#8a5a00",
+            background="#fff3cd",
+        ).pack(side="left", padx=(0, 8))
+        tk.Label(
+            warning,
+            text=warning_message,
+            justify="left",
+            anchor="w",
+            wraplength=610,
+            foreground="#6b4e00",
+            background="#fff3cd",
+        ).pack(side="left", fill="x", expand=True)
+        tk.Label(
+            warning,
+            text="⚠",
+            font=("Segoe UI Symbol", 14, "bold"),
+            foreground="#8a5a00",
+            background="#fff3cd",
+        ).pack(side="right", padx=(8, 0))
+
         ttk.Label(
             win,
-            text="Código Roll20:",
+            text="Cole uma macro gerada pelo programa:",
             style="Section.TLabel"
-        ).pack(anchor="w", padx=15, pady=(15, 5))
+        ).pack(anchor="w", padx=15, pady=(0, 5))
 
         text = tk.Text(
             win,
@@ -2829,15 +4530,22 @@ class MacroBuilderApp:
 
         def insert():
             value = text.get("1.0", "end-1c")
+            if self.load_custom_macro(value):
+                win.destroy()
+                return
 
-            if value.strip():
-                self.insert_text(value)
-
-            win.destroy()
+            messagebox.showwarning(
+                "Importe sua Macro",
+                (
+                    "Macro não suportada, tente recriar suas funções no "
+                    "programa ou revise ela novamente"
+                ),
+                parent=win,
+            )
 
         ttk.Button(
             win,
-            text="Inserir",
+            text="Carregar macro",
             command=insert
         ).pack(pady=10)
 
