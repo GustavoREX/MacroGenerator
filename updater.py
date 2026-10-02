@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import ctypes
+import hashlib
 from ctypes import wintypes
 
 
@@ -12,6 +13,50 @@ SYNCHRONIZE = 0x00100000
 WAIT_OBJECT_0 = 0x00000000
 ERROR_INVALID_PARAMETER = 87
 INFINITE = 0xFFFFFFFF
+REPLACE_RETRY_SECONDS = 30
+
+
+def write_update_log(message: str) -> None:
+    log_path = os.path.join(
+        os.path.dirname(os.path.abspath(sys.executable)),
+        "updater.log",
+    )
+    try:
+        with open(log_path, "a", encoding="utf-8") as log_file:
+            log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def show_update_error(message: str) -> None:
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.MessageBoxW.argtypes = [
+            wintypes.HWND,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+        ]
+        user32.MessageBoxW.restype = ctypes.c_int
+        user32.MessageBoxW(
+            None,
+            message,
+            "Falha ao atualizar o Macro Generator",
+            0x10,
+        )
+    except (AttributeError, OSError):
+        pass
+
+
+def files_match(first_path: str, second_path: str) -> bool:
+    def digest(path: str) -> str:
+        checksum = hashlib.sha256()
+        with open(path, "rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                checksum.update(chunk)
+        return checksum.hexdigest()
+
+    return digest(first_path) == digest(second_path)
 
 
 def wait_for_process(pid: int) -> None:
@@ -83,10 +128,18 @@ def replace_executable(target: str, staged: str) -> None:
             temporary_target,
         )
 
-        os.replace(
-            temporary_target,
-            target,
-        )
+        deadline = time.monotonic() + REPLACE_RETRY_SECONDS
+        while True:
+            try:
+                os.replace(
+                    temporary_target,
+                    target,
+                )
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.5)
 
         temporary_target = None
 
@@ -118,6 +171,10 @@ def main() -> int:
     target_dir = os.path.dirname(target)
 
     try:
+        write_update_log(
+            f"Iniciando troca. destino={target}; staging={staged}; pid={pid}"
+        )
+
         # O Macro Generator ainda está usando o executável.
         wait_for_process(pid)
 
@@ -126,6 +183,12 @@ def main() -> int:
             target,
             staged,
         )
+
+        if not files_match(target, staged):
+            raise RuntimeError(
+                "A verificação do executável instalado não corresponde "
+                "ao arquivo baixado."
+            )
 
         # Inicia a versão nova.
         subprocess.Popen(
@@ -140,24 +203,17 @@ def main() -> int:
         except OSError:
             pass
 
+        write_update_log("Atualização instalada e novo executável iniciado.")
         return 0
 
     except Exception as error:
-        print(
-            f"Falha na atualização: {error}",
-            file=sys.stderr,
+        error_message = f"Falha na atualização: {error}"
+        write_update_log(error_message)
+        show_update_error(
+            f"{error_message}\n\n"
+            "A versão antiga não foi reiniciada. O arquivo baixado foi "
+            "mantido para permitir uma nova tentativa."
         )
-
-        # Tenta abrir a versão antiga se ela ainda existir.
-        if os.path.isfile(target):
-            try:
-                subprocess.Popen(
-                    [target],
-                    cwd=target_dir,
-                    close_fds=True,
-                )
-            except OSError:
-                pass
 
         return 1
 

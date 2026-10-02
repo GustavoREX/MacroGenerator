@@ -17,7 +17,7 @@ from typing import List
 from urllib.request import Request, urlopen
 
 
-VERSAO = "0.01.7.0"  # 0-Versão oficial. 01-Versão funcional. 5-Teste. 0-Correção.
+VERSAO = "0.01.7.2"  # 0-Versão oficial. 01-Versão funcional. 5-Teste. 0-Correção.
 
 RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
 
