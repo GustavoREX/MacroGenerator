@@ -1,4 +1,3 @@
-import ast
 import hashlib
 from html import unescape
 import json
@@ -10,17 +9,38 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 from dataclasses import dataclass, field
 from typing import List
 from urllib.request import Request, urlopen
 
-
-VERSAO = "0.01.7.2"  # 0-Versão oficial. 01-Versão funcional. 5-Teste. 0-Correção.
-
-RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
-
+from constants import (
+    ADVANCED_QUESTION_ESCAPES,
+    ATTACK_PRIDE_EFFECT,
+    BEST_DIE_FORMULA,
+    RELEASE_API_URL,
+    RESISTANCE_MACRO_BASE,
+    SKILL_MACRO_BASE,
+    SKILL_MACRO_CLOSING,
+    VERSAO,
+)
+from libraries import (
+    ATTRIBUTES,
+    COMMON_WEAPONS,
+    DAMAGE_SPECIAL_TRACK_BY_DIE,
+    DAMAGE_STEP_TRACKS,
+    DADOSCOMUNS,
+    DADOSEXOTICOS,
+    DADOSPADRAO,
+    GLOBALMODIFIERS,
+    PERICIAS_ESPECIALISTA,
+    PERICIASATACK,
+)
+from preview import (
+    PreviewMixin,
+    format_roll_preview,
+    get_preview_question_choices,
+)
 
 # ============================================================
 # Auto-Updater
@@ -54,6 +74,27 @@ def get_update_directory() -> str:
     directory = os.path.join(local_app_data, "MacroGenerator")
     os.makedirs(directory, exist_ok=True)
     return directory
+
+
+def set_responsive_window_geometry(
+    window,
+    width,
+    height,
+    minimum_width=360,
+    minimum_height=240,
+):
+    screen_width = window.winfo_screenwidth()
+    screen_height = window.winfo_screenheight()
+    available_width = max(320, screen_width - 40)
+    available_height = max(240, screen_height - 80)
+    width = min(width, available_width)
+    height = min(height, available_height)
+    window.geometry(f"{width}x{height}")
+    window.minsize(
+        min(minimum_width, width, available_width),
+        min(minimum_height, height, available_height),
+    )
+    window.maxsize(available_width, available_height)
 
 
 def get_bundled_updater() -> str | None:
@@ -227,7 +268,7 @@ def update_frozen_app() -> bool:
 
     window = tk.Tk()
     window.title("Macro Generator - Atualizador")
-    window.geometry("410x155")
+    set_responsive_window_geometry(window, 410, 155, 320, 130)
     window.resizable(False, False)
     window.attributes("-topmost", True)
 
@@ -547,132 +588,6 @@ def update_frozen_app() -> bool:
 # ============================================================
 
 
-# ------------------------------------------------------------
-# Biblioteca geral de atributos da ficha
-# ------------------------------------------------------------
-ATTRIBUTES = {
-    "Força": "@{for_mod}",
-    "Destreza": "@{des_mod}",
-    "Constituição": "@{con_mod}",
-    "Inteligência": "@{int_mod}",
-    "Sabedoria": "@{sab_mod}",
-    "Carisma": "@{car_mod}",
-}
-COMMON_WEAPONS = {
-    "Arco Longo": {
-        "threat": "20",
-        "skill": "Pontaria",
-        "damage": "1d8",
-        "attributes": (),
-        "critical_multiplier": "3",
-        "damage_type": "Perfurante",
-    },
-    "Espada Longa": {
-        "threat": "19",
-        "skill": "Luta",
-        "damage": "?{estilo|uma mão,1d8|duas mãos,1d10}",
-        "attributes": ("Força",),
-        "critical_multiplier": "2",
-        "damage_type": "Corte",
-    },
-    "Machado de Guerra": {
-        "threat": "20",
-        "skill": "Luta",
-        "damage": "1d12",
-        "attributes": ("Força",),
-        "critical_multiplier": "3",
-        "damage_type": "Corte",
-    },
-    "Martelo de Guerra": {
-        "threat": "20",
-        "skill": "Luta",
-        "damage": "1d8",
-        "attributes": ("Força",),
-        "critical_multiplier": "3",
-        "damage_type": "Esmagamento",
-    },
-    "Montante": {
-        "threat": "19",
-        "skill": "Luta",
-        "damage": "2d6",
-        "attributes": ("Força",),
-        "critical_multiplier": "2",
-        "damage_type": "Corte",
-    },
-}
-GLOBALMODIFIERS = {
-    "Bonus de Ataque": "@{ataquetemp}",
-    "Bonus de Condição": "@{condicaomodataque}",    
-    "Bonus de Condição2": "@{condicaomodataquecc}",
-    "Bonus dano Temporario":"@{danotemp}",
-    "Bonus Rolagem":"@{rolltemp}",
-    "Concatenaçao de ataque":"@{condicaomodataque}+@{condicaomodataquecc}]]+@{ataquetemp}",
-    "Concatenaçao de Dano":"@{danotemp}+@{rolltemp}"
-}
-PERICIASATACK = {
-    "Luta":"[[@{lutatotal}",
-    "Pontaria":"[[@{pontariatotal}",
-    "Atuação":"[[@{atuacaototal}",
-    "Furtividade":"[[@{furtividadetotal}"
-}
-DADOSCOMUNS = {
-    "d4": "1d4",
-    "d6": "1d6",
-    "d8": "1d8",
-    "d10": "1d10",
-    "d12": "1d12",
-    "2d6": "2d6",
-}
-
-DADOSEXOTICOS = {
-    "Min": "1d1",
-    "d2": "1d2",
-    "d3": "1d3",
-    "2d4": "2d4",
-    "3d4": "3d4",
-    "3d6": "3d6",
-    "2d8": "2d8",
-    "2d10": "2d10",
-    "4d6": "4d6",
-    "4d8": "4d8",
-    "3d10": "3d10",
-    "4d10": "4d10",
-    "Max": "4d12",
-}
-
-DADOSPADRAO = {
-    "Comuns": DADOSCOMUNS,
-    "Exóticos": DADOSEXOTICOS,
-}
-
-DAMAGE_STEP_TRACKS = {
-    "Padrão": (
-        "1d1", "1d2", "1d3", "1d4", "1d6", "1d8", "1d10", "1d12",
-        "3d6", "4d6", "4d8", "4d10", "4d12"
-    ),
-    "Especial: 2d4": ("1d1", "1d2", "1d3", "1d4","1d6", "2d4", "1d10","1d12",
-        "3d6", "4d6", "4d8", "4d10", "4d12"),
-    "Especial: 2d8": ("1d1", "1d2", "1d3", "1d4", "1d6", "1d8","1d10", "2d6", "2d8", "3d8", "4d8", "4d10", "4d12",
-    ),
-    "Especial: 3d4": ("1d1", "1d2", "1d3", "1d4", "1d6", "1d8","1d10", "3d4", "3d6", "4d6", "4d8", "4d10", "4d12"),
-    "Especial: 2d10": ("1d1", "1d2", "1d3", "1d4", "1d6", "1d8","1d10", "2d6","2d8", "2d10", "3d10", "4d10", "4d12"),
-}
-
-DAMAGE_SPECIAL_TRACK_BY_DIE = {
-    "2d4": "Especial: 2d4",
-    "2d6": "Especial: 2d8",
-    "3d4": "Especial: 3d4",
-    "2d8": "Especial: 2d10",
-    "2d10": "Especial: 2d10",
-    "3d10": "Especial: 2d10",
-}
-BEST_DIE_FORMULA = "?{melhor dado|Não,1d20|Sim,2d20kh1}"
-MACRO_BUTTON_PATTERN = re.compile(
-    r"\[([^\]\r\n]+)\]\(~@\{character_name\}\|([^\)\r\n]+)\)",
-    flags=re.IGNORECASE,
-)
-
-
 def get_damage_step_options() -> list[tuple[str, str]]:
     options = []
     seen_values = set()
@@ -808,10 +723,37 @@ def simplify_condition_questions(formula: str) -> str:
     return "".join(parts)
 
 
-def build_damage_roll_formula(base_formula: str, attributes: list[str] | None = None) -> str:
+def build_damage_roll_formula(
+    base_formula: str,
+    attributes: list[str] | None = None,
+    universal_conditions: list[str] | None = None,
+) -> str:
     formula = join_formula_parts(base_formula, *(attributes or []))
-    if formula:
-        formula += f"+{GLOBALMODIFIERS['Concatenaçao de Dano']}"
+    universal_conditions = [
+        condition
+        for condition in (universal_conditions or [])
+        if condition
+    ]
+    if formula or universal_conditions:
+        damage_suffix = GLOBALMODIFIERS["Concatenaçao de Dano"]
+        roll_bonus = GLOBALMODIFIERS["Bonus Rolagem"]
+        if universal_conditions and roll_bonus in damage_suffix:
+            roll_bonus_index = damage_suffix.rfind(roll_bonus)
+            before_roll_bonus = damage_suffix[:roll_bonus_index].rstrip("+")
+            formula = join_formula_parts(
+                formula,
+                before_roll_bonus,
+                *universal_conditions,
+                roll_bonus,
+            )
+        elif universal_conditions:
+            formula = join_formula_parts(
+                formula,
+                *universal_conditions,
+                damage_suffix,
+            )
+        else:
+            formula += f"+{damage_suffix}"
     return formula
 
 
@@ -819,8 +761,13 @@ def build_damage_expression(
     base_formula: str,
     extra_values: list[str] | None = None,
     attributes: list[str] | None = None,
+    universal_conditions: list[str] | None = None,
 ) -> str:
-    formula = build_damage_roll_formula(base_formula, attributes)
+    formula = build_damage_roll_formula(
+        base_formula,
+        attributes,
+        universal_conditions,
+    )
     return build_roll_expression(formula, extra_values)
 
 
@@ -828,8 +775,13 @@ def build_critical_expression(
     base_formula: str,
     extra_values: list[str] | None = None,
     attributes: list[str] | None = None,
+    universal_conditions: list[str] | None = None,
 ) -> str:
-    formula = build_damage_roll_formula(base_formula, attributes)
+    formula = build_damage_roll_formula(
+        base_formula,
+        attributes,
+        universal_conditions,
+    )
     return build_roll_expression(formula, extra_values)
 
 
@@ -839,185 +791,6 @@ def build_roll_expression(formula: str, extra_values: list[str] | None = None) -
     if expression and extras:
         return expression + extras
     return expression or extras
-
-
-def parse_preview_question(formula: str, start: int):
-    parts = []
-    part_start = start + 2
-    depth = 1
-
-    for index in range(part_start, len(formula)):
-        character = formula[index]
-        if character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                parts.append(formula[part_start:index])
-                return parts, index + 1
-        elif character == "|" and depth == 1:
-            parts.append(formula[part_start:index])
-            part_start = index + 1
-
-    return None, len(formula)
-
-
-def get_preview_question_choices(*formulas: str) -> dict[str, str]:
-    choices = {}
-    for formula in formulas:
-        cursor = 0
-        while True:
-            start = formula.find("?{", cursor)
-            if start == -1:
-                break
-            parts, end = parse_preview_question(formula, start)
-            if parts and len(parts) > 1:
-                _, separator, value = parts[1].partition(",")
-                if separator:
-                    choices.setdefault(parts[0], value)
-            cursor = start + 2
-    return choices
-
-
-def select_first_preview_options(formula: str, choices: dict[str, str] | None = None) -> str:
-    choices = choices or {}
-    result = []
-    cursor = 0
-    while True:
-        start = formula.find("?{", cursor)
-        if start == -1:
-            result.append(formula[cursor:])
-            break
-        result.append(formula[cursor:start])
-        parts, end = parse_preview_question(formula, start)
-        if not parts:
-            result.append(formula[start:])
-            break
-
-        if len(parts) > 1:
-            _, separator, value = parts[1].partition(",")
-            replacement = value if separator else parts[1]
-        else:
-            replacement = choices.get(parts[0], formula[start:end])
-
-        if replacement == formula[start:end]:
-            result.append(formula[start:end])
-        else:
-            result.append(select_first_preview_options(replacement, choices))
-        cursor = end
-
-    return "".join(result)
-
-
-def preview_die_value(match: re.Match, force_d20: bool = False) -> str:
-    count = int(match.group(1) or "1")
-    sides = int(match.group(2))
-    modifier = (match.group(3) or "").lower()
-    modifier_count = int(match.group(4) or "1") if modifier else 0
-
-    if force_d20 and sides == 20:
-        return "20"
-    if modifier.startswith("k"):
-        count = min(count, modifier_count)
-    elif modifier.startswith("d"):
-        count = max(0, count - modifier_count)
-
-    value = count * sides / 2
-    return str(int(value)) if value.is_integer() else str(value)
-
-
-def simplify_preview_math(expression: str) -> str:
-    try:
-        tree = ast.parse(expression, mode="eval")
-    except SyntaxError:
-        return "0"
-
-    def visit(node):
-        if isinstance(node, ast.Expression):
-            return visit(node.body)
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return str(node.value), True, node.value
-        if isinstance(node, ast.Name):
-            return "0", True, 0
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
-            text, numeric, value = visit(node.operand)
-            sign = -1 if isinstance(node.op, ast.USub) else 1
-            if numeric:
-                result = sign * value
-                return str(result), True, result
-            return ("-" if sign < 0 else "+") + text, False, None
-        if isinstance(node, ast.BinOp) and isinstance(
-            node.op,
-            (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv),
-        ):
-            left, left_numeric, left_value = visit(node.left)
-            right, right_numeric, right_value = visit(node.right)
-            operators = {
-                ast.Add: "+",
-                ast.Sub: "-",
-                ast.Mult: "×",
-                ast.Div: "/",
-                ast.FloorDiv: "/",
-            }
-            if left_numeric and right_numeric:
-                try:
-                    result = {
-                        ast.Add: lambda: left_value + right_value,
-                        ast.Sub: lambda: left_value - right_value,
-                        ast.Mult: lambda: left_value * right_value,
-                        ast.Div: lambda: left_value / right_value,
-                        ast.FloorDiv: lambda: left_value // right_value,
-                    }[type(node.op)]()
-                except ZeroDivisionError:
-                    return f"{left} {operators[type(node.op)]} {right}", False, None
-                if isinstance(result, float) and result.is_integer():
-                    result = int(result)
-                return str(result), True, result
-            return f"{left} {operators[type(node.op)]} {right}", False, None
-        raise ValueError("Unsupported preview expression")
-
-    try:
-        result, numeric, value = visit(tree)
-    except (ValueError, TypeError):
-        return "0"
-    if numeric and isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return result
-
-
-def format_roll_preview(
-    formula: str,
-    force_d20: bool = False,
-    choices: dict[str, str] | None = None,
-) -> str:
-    preview = select_first_preview_options(formula or "", choices)
-    preview = preview.replace("[[", "").replace("]]", "")
-    preview = re.sub(r"cs>\d+", "", preview, flags=re.IGNORECASE)
-
-    def replace_attribute(match):
-        return "0"
-
-    preview = re.sub(r"@\{([^}]+)\}", replace_attribute, preview)
-    preview = re.sub(
-        r"(?<![\w.])(\d*)d(\d+)(?:(kh|kl|dh|dl)(\d*))?",
-        lambda match: preview_die_value(match, force_d20),
-        preview,
-        flags=re.IGNORECASE,
-    )
-    return simplify_preview_math(preview)
-
-
-def split_macro_button_markup(text: str) -> list[tuple[str, str]]:
-    parts = []
-    cursor = 0
-    for match in MACRO_BUTTON_PATTERN.finditer(text or ""):
-        if match.start() > cursor:
-            parts.append(("text", text[cursor:match.start()]))
-        parts.append(("button", match.group(1)))
-        cursor = match.end()
-    if cursor < len(text or ""):
-        parts.append(("text", text[cursor:]))
-    return parts
 
 
 @dataclass
@@ -1062,18 +835,70 @@ def build_condition_question(
     return "".join(parts)
 
 
-ADVANCED_QUESTION_ESCAPES = str.maketrans({
-    "|": "&#124;",
-    ",": "&#44;",
-    "{": "&#123;",
-    "}": "&#125;",
-    "&": "&#38;",
-    "=": "&#61;",
-    "(": "&#40;",
-    ")": "&#41;",
-    "[": "&#91;",
-    "]": "&#93;",
-})
+def build_modified_condition_question(
+    name: str,
+    options: List[QuestionOption],
+    effect_value: str,
+    effect_mode: str,
+    wrap_values: bool = True,
+) -> str:
+    modifier = effect_value.strip()
+    if not modifier:
+        return build_condition_question(name, options, wrap_values)
+
+    question = build_condition_question(name, options, wrap_values=False)
+    operator = "*" if effect_mode == "multiplicativo" else "+"
+    return f"[[({question}{operator}{modifier})]]"
+
+
+def parse_result_modified_condition(
+    text: str,
+) -> tuple[str, str, str] | None:
+    source = (text or "").strip()
+    if not source.startswith("[[(") or not source.endswith(")]]"):
+        return None
+
+    expression = source[3:-3].strip()
+    if not expression.startswith("?{"):
+        return None
+
+    depth = 0
+    index = 0
+    question_end = None
+    while index < len(expression):
+        if expression.startswith("?{", index):
+            depth += 1
+            index += 2
+        elif expression.startswith("&#125;", index) and depth:
+            depth -= 1
+            index += len("&#125;")
+            if depth == 0:
+                question_end = index
+                break
+        elif expression[index] == "}" and depth:
+            depth -= 1
+            index += 1
+            if depth == 0:
+                question_end = index
+                break
+        elif expression.startswith("&#123;", index):
+            index += len("&#123;")
+        elif expression[index] == "{":
+            depth += 1
+            index += 1
+        else:
+            index += 1
+
+    if question_end is None:
+        return None
+
+    question = expression[:question_end]
+    modifier = expression[question_end:].strip()
+    if modifier.startswith("*"):
+        return question, modifier[1:].strip(), "multiplicativo"
+    if modifier.startswith("+"):
+        return question, modifier[1:].strip(), "aditivo"
+    return None
 
 
 def build_advanced_question_value(
@@ -1927,12 +1752,43 @@ class MacroButton:
         return f"[{self.text}]({self.action})"
 
 
-class MacroBuilderApp:
+class MacroBuilderApp(PreviewMixin):
     def __init__(self, root):
         self.root = root
+        self.skill_macro_extra = ""
+        self.skill_macro_question_name = "Pergunta"
+        self.skill_macro_question_options = []
+        self.skill_macro_pride_enabled = False
+        self.skill_macro_effect_enabled = True
+        self.skill_macro_effect_value = ""
+        self.skill_macro_effect_mode = "multiplicativo"
+        self.skill_macro_specialist_enabled = False
+        self.skill_macro_specialist_skills = []
+        self.skill_macro_specialist_intelligence = "1"
+        self.skill_macro_button = None
+        self.skill_macro_gear_button = None
+        self.resistance_macro_extra = ""
+        self.resistance_macro_question_name = "Pergunta"
+        self.resistance_macro_question_options = []
+        self.resistance_macro_pride_enabled = False
+        self.resistance_macro_effect_enabled = True
+        self.resistance_macro_effect_value = ""
+        self.resistance_macro_effect_mode = "multiplicativo"
+        self.resistance_macro_button = None
+        self.resistance_macro_gear_button = None
         self.root.title("Roll20 Macro Builder")
-        self.root.geometry("1100x720")
-        self.root.minsize(950, 620)
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        available_width = max(320, screen_width - 40)
+        available_height = max(240, screen_height - 80)
+        self.root.geometry(
+            f"{min(1100, available_width)}x{min(720, available_height)}"
+        )
+        self.root.minsize(
+            min(720, available_width),
+            min(480, available_height),
+        )
+        self.root.maxsize(available_width, available_height)
 
         self.setup_style()
         self.build_ui()
@@ -1954,12 +1810,141 @@ class MacroBuilderApp:
         style.configure("Small.TLabel", font=("Segoe UI", 9))
         style.configure("DamageStep.TButton", font=("Segoe UI", 18, "bold"), padding=(18, 12))
         style.configure("DamageDie.TButton", padding=(4, 5))
+        style.configure("Modified.TButton", foreground="#b3261e")
+        style.map("Modified.TButton", foreground=[("active", "#b3261e")])
+        style.configure(
+            "SpecialistSelected.TButton",
+            background="#1976d2",
+            foreground="white",
+        )
+        style.map(
+            "SpecialistSelected.TButton",
+            background=[("active", "#1565c0"), ("!disabled", "#1976d2")],
+            foreground=[("!disabled", "white")],
+        )
+        style.configure(
+            "SpecialistDisabled.TButton",
+            background="#d0d0d0",
+            foreground="#777777",
+        )
+        style.map(
+            "SpecialistDisabled.TButton",
+            background=[("disabled", "#d0d0d0")],
+            foreground=[("disabled", "#777777")],
+        )
+        style.configure(
+            "Selected.TButton",
+            background="#1976d2",
+            foreground="white",
+        )
+        style.map(
+            "Selected.TButton",
+            background=[("active", "#1565c0"), ("!disabled", "#1976d2")],
+            foreground=[("!disabled", "white")],
+        )
+        style.configure(
+            "Pride.TButton",
+            background="#f2c94c",
+            foreground="#3d3000",
+        )
+        style.map(
+            "Pride.TButton",
+            background=[("active", "#e0b83f")],
+            foreground=[("active", "#3d3000")],
+        )
+        style.configure(
+            "EffectInactive.TButton",
+            background="#dceeff",
+            foreground="#174a75",
+        )
+        style.configure(
+            "EffectActive.TButton",
+            background="#1976d2",
+            foreground="white",
+        )
+        style.map(
+            "EffectActive.TButton",
+            background=[("disabled", "#1976d2"), ("active", "#1565c0")],
+            foreground=[("disabled", "white")],
+        )
+        style.configure(
+            "PrideInactive.TButton",
+            background="#fff4cc",
+            foreground="#765600",
+        )
+        style.configure(
+            "PrideActive.TButton",
+            background="#f2c94c",
+            foreground="#3d3000",
+        )
+        style.map(
+            "PrideActive.TButton",
+            background=[("disabled", "#f2c94c"), ("active", "#e0b83f")],
+            foreground=[("disabled", "#3d3000")],
+        )
+        style.configure(
+            "EditorSave.TButton",
+            background="#2e7d32",
+            foreground="white",
+        )
+        style.map(
+            "EditorSave.TButton",
+            background=[("active", "#256628")],
+            foreground=[("active", "white")],
+        )
+        style.configure(
+            "EditorCancel.TButton",
+            background="#c62828",
+            foreground="white",
+        )
+        style.map(
+            "EditorCancel.TButton",
+            background=[("active", "#a91f1f")],
+            foreground=[("active", "white")],
+        )
+        self.configure_preview_styles(style)
 
     def build_ui(self):
+        page_viewport = ttk.Frame(self.root)
+        page_viewport.pack(fill="both", expand=True)
+        page_viewport.columnconfigure(0, weight=1)
+        page_viewport.rowconfigure(0, weight=1)
+
+        self.page_canvas = tk.Canvas(
+            page_viewport,
+            highlightthickness=0,
+        )
+        self.page_canvas.grid(row=0, column=0, sticky="nsew")
+        self.page_scrollbar = ttk.Scrollbar(
+            page_viewport,
+            orient="vertical",
+            command=self.page_canvas.yview,
+        )
+        self.page_canvas.configure(
+            yscrollcommand=self.page_scrollbar.set,
+        )
+        self.page_content = ttk.Frame(self.page_canvas)
+        self.page_canvas_window = self.page_canvas.create_window(
+            (0, 0),
+            window=self.page_content,
+            anchor="nw",
+        )
+        self.page_content.bind(
+            "<Configure>",
+            lambda _event: self.schedule_page_scrollbar_update(),
+        )
+        self.page_canvas.bind(
+            "<Configure>",
+            self.resize_page_content,
+        )
+        self.root.bind_all("<MouseWheel>", self.scroll_main_page, add="+")
+        self.root.bind_all("<Button-4>", self.scroll_main_page, add="+")
+        self.root.bind_all("<Button-5>", self.scroll_main_page, add="+")
+
         # ----------------------------------------------------
         # Topo
         # ----------------------------------------------------
-        header = ttk.Frame(self.root, padding=(12, 10))
+        header = ttk.Frame(self.page_content, padding=(12, 10))
         header.pack(fill="x")
 
         ttk.Label(
@@ -1974,10 +1959,65 @@ class MacroBuilderApp:
             style="Small.TLabel"
         ).pack(side="left", padx=(12, 0))
 
+        build_info = [None]
+        build_info_button = ttk.Label(
+            header,
+            text="ⓘ",
+            cursor="question_arrow",
+            foreground="#286090",
+        )
+        build_info_button.pack(side="left", padx=(6, 0))
+        build_info_text = (
+            "Build 0.01.8\n"
+            "- Adicionados novos módulos\n"
+            "- Adicionadas macros básicas de Perícias e Resistências, "
+            "com alternadores para condicionais\n"
+            "- Adicionado módulo para alterar e adicionar novos efeitos às "
+            "condicionais, como efeitos multiplicativos e modularidade de dados\n"
+            "- Adicionado o efeito de Macro Universal para ataques "
+            "(para habilidades aplicadas a tudo)\n"
+            "  - Mini revamp na interface para tentar evitar que componentes "
+            "sejam cortados da tela\n"
+            "  - Início da adição de botões que geram efeitos de habilidades "
+            "de classe e os adicionam diretamente às macros "
+            "(Orgulho do Nobre foi o primeiro a ser testado)"
+        )
+
+        def show_build_info(_event):
+            if build_info[0] is not None:
+                return
+            tooltip = tk.Toplevel(self.root)
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(
+                f"+{build_info_button.winfo_rootx()}+"
+                f"{build_info_button.winfo_rooty() + build_info_button.winfo_height()}"
+            )
+            tk.Label(
+                tooltip,
+                text=build_info_text,
+                justify="left",
+                wraplength=520,
+                background="#fff8dc",
+                foreground="#333333",
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=6,
+            ).pack()
+            build_info[0] = tooltip
+
+        def hide_build_info(_event):
+            if build_info[0] is not None:
+                build_info[0].destroy()
+                build_info[0] = None
+
+        build_info_button.bind("<Enter>", show_build_info)
+        build_info_button.bind("<Leave>", hide_build_info)
+
         # ----------------------------------------------------
         # Nome da macro
         # ----------------------------------------------------
-        name_frame = ttk.Frame(self.root, padding=(12, 0, 12, 8))
+        name_frame = ttk.Frame(self.page_content, padding=(12, 0, 12, 8))
         name_frame.pack(fill="x")
 
         ttk.Label(name_frame, text="Nome do ataque:").pack(side="left")
@@ -1986,9 +2026,9 @@ class MacroBuilderApp:
         name_entry = ttk.Entry(
             name_frame,
             textvariable=self.attack_name_var,
-            width=45
+            width=26
         )
-        name_entry.pack(side="left", padx=(8, 0))
+        name_entry.pack(side="left", padx=(8, 0), fill="x", expand=True)
         name_entry.bind("<KeyRelease>", lambda e: self.update_preview())
 
         ttk.Label(name_frame, text="Nome exibido:").pack(
@@ -1999,9 +2039,9 @@ class MacroBuilderApp:
         character_display_entry = ttk.Entry(
             name_frame,
             textvariable=self.character_display_var,
-            width=24,
+            width=18,
         )
-        character_display_entry.pack(side="left", padx=(8, 0))
+        character_display_entry.pack(side="left", padx=(8, 0), fill="x")
         character_display_entry.bind(
             "<KeyRelease>",
             lambda _event: self.update_preview(),
@@ -2010,24 +2050,119 @@ class MacroBuilderApp:
         # ----------------------------------------------------
         # Corpo principal
         # ----------------------------------------------------
-        body = ttk.PanedWindow(self.root, orient="horizontal")
+        body = ttk.PanedWindow(self.page_content, orient="horizontal")
         body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
         # Painel esquerdo - componentes
         left = ttk.Frame(body, padding=8)
+        left.configure(width=165)
+        left.pack_propagate(False)
         body.add(left, weight=1)
 
         # Painel central - campos
         center = ttk.Frame(body, padding=8)
-        body.add(center, weight=2)
+        body.add(center, weight=3)
 
         # Painel direito - preview
         right = ttk.Frame(body, padding=8)
-        body.add(right, weight=3)
+        body.add(right, weight=5)
 
         self.build_component_panel(left)
         self.build_editor_panel(center)
         self.build_preview_panel(right)
+        self.schedule_page_scrollbar_update()
+
+    def resize_page_content(self, event):
+        self.page_canvas.itemconfigure(
+            self.page_canvas_window,
+            width=event.width,
+        )
+        self.schedule_page_scrollbar_update()
+
+    def schedule_page_scrollbar_update(self):
+        if getattr(self, "_page_scroll_update_pending", False):
+            return
+        self._page_scroll_update_pending = True
+        self.root.after_idle(self.update_page_scrollbar)
+
+    def update_page_scrollbar(self):
+        self._page_scroll_update_pending = False
+        self.root.update_idletasks()
+        content_height = self.page_content.winfo_reqheight()
+        viewport_height = self.page_canvas.winfo_height()
+        needs_scrollbar = content_height > viewport_height + 1
+        scrollbar_visible = bool(self.page_scrollbar.winfo_manager())
+        if needs_scrollbar != scrollbar_visible:
+            if needs_scrollbar:
+                self.page_scrollbar.grid(row=0, column=1, sticky="ns")
+            else:
+                self.page_scrollbar.grid_remove()
+
+        self.page_canvas.configure(
+            scrollregion=(0, 0, self.page_canvas.winfo_width(), content_height)
+        )
+        if not needs_scrollbar:
+            self.page_canvas.yview_moveto(0)
+
+    def scroll_main_page(self, event):
+        widget = event.widget
+        scroll_canvas = None
+        if isinstance(widget, ttk.Scrollbar):
+            scroll_canvas = next(
+                (
+                    child
+                    for child in widget.master.winfo_children()
+                    if isinstance(child, tk.Canvas)
+                ),
+                None,
+            )
+        else:
+            current = widget
+            while current is not None and current is not self.root:
+                if isinstance(current, tk.Canvas):
+                    scroll_canvas = current
+                    break
+                current = current.master
+
+        if scroll_canvas is not None and scroll_canvas is not self.page_canvas:
+            direction = self.get_scroll_direction(event)
+            self.scroll_canvas_by_units(scroll_canvas, direction)
+            return "break"
+
+        widget_path = str(widget)
+        content_path = str(self.page_content)
+        if not (
+            widget_path == content_path
+            or widget_path.startswith(content_path + ".")
+        ):
+            return None
+
+        direction = self.get_scroll_direction(event)
+        self.scroll_canvas_by_units(self.page_canvas, direction)
+        return "break"
+
+    @staticmethod
+    def get_scroll_direction(event):
+        if getattr(event, "num", None) == 4:
+            return -1
+        if getattr(event, "num", None) == 5:
+            return 1
+        direction = int(-event.delta / 120)
+        if direction == 0:
+            direction = -1 if event.delta > 0 else 1
+        return direction
+
+    @staticmethod
+    def scroll_canvas_by_units(canvas, direction):
+        top, bottom = canvas.yview()
+        if bottom - top >= 0.98:
+            return False
+        at_top = direction < 0 and top <= 0.01
+        at_bottom = direction > 0 and bottom >= 0.99
+        if at_top or at_bottom:
+            return False
+        canvas.yview_scroll(direction, "units")
+        return True
 
     # ========================================================
     # Painel de componentes
@@ -2043,29 +2178,30 @@ class MacroBuilderApp:
         ttk.Label(
             parent,
             text="Insira elementos Roll20 nos campos.",
-            wraplength=190
+            wraplength=130
         ).pack(anchor="w", pady=(0, 12))
 
         buttons = [
             ("Armas comuns", self.open_common_weapons_dialog),
-            ("Calculador de Passos de Dano", self.insert_fixed_bonus),
+            ("Passos de Dano", self.insert_fixed_bonus),
             ("Pergunta Roll20", self.insert_question),
             ("Botão de macro", self.insert_button),
-            ("Importe sua Macro", self.insert_custom),
+            ("Importe\n    sua\n Macro", self.insert_custom),
         ]
 
         for text, command in buttons:
             ttk.Button(
                 parent,
                 text=text,
-                command=command
+                command=command,
+                padding=(4, 8),
             ).pack(fill="x", pady=3)
 
         ttk.Separator(parent).pack(fill="x", pady=12)
 
         ttk.Label(
             parent,
-            text="Atributos disponíveis",
+            text="Macros Base",
             style="Section.TLabel"
         ).pack(anchor="w", pady=(0, 6))
 
@@ -2073,11 +2209,220 @@ class MacroBuilderApp:
         attr_frame.pack(fill="x")
 
         for name, code in ATTRIBUTES.items():
+            if name == "Força":
+                skill_frame = ttk.Frame(attr_frame)
+                skill_frame.pack(fill="x", pady=2)
+                self.skill_macro_button = ttk.Button(
+                    skill_frame,
+                    text="⚒ Perícias",
+                    command=self.copy_skill_macro,
+                    padding=(4, 8),
+                )
+                self.skill_macro_button.pack(
+                    side="left",
+                    fill="x",
+                    expand=True,
+                )
+                self.skill_macro_gear_button = ttk.Button(
+                    skill_frame,
+                    text="⚙",
+                    width=3,
+                    command=self.open_skill_macro_editor,
+                )
+                self.skill_macro_gear_button.pack(side="left", padx=(4, 0))
+                self.update_skill_macro_gear_style()
+                continue
+
+            if name == "Destreza":
+                resistance_frame = ttk.Frame(attr_frame)
+                resistance_frame.pack(fill="x", pady=2)
+                self.resistance_macro_button = ttk.Button(
+                    resistance_frame,
+                    text="💪 Resistências",
+                    command=self.copy_resistance_macro,
+                    padding=(4, 8),
+                )
+                self.resistance_macro_button.pack(
+                    side="left",
+                    fill="x",
+                    expand=True,
+                )
+                self.resistance_macro_gear_button = ttk.Button(
+                    resistance_frame,
+                    text="⚙",
+                    width=3,
+                    command=lambda: self.open_skill_macro_editor("resistance"),
+                )
+                self.resistance_macro_gear_button.pack(
+                    side="left",
+                    padx=(4, 0),
+                )
+                self.update_resistance_macro_gear_style()
+                continue
+
             ttk.Button(
                 attr_frame,
                 text=name,
-                command=lambda c=code: self.insert_text(c)
+                command=lambda c=code: self.insert_text(c),
+                padding=(4, 8),
             ).pack(fill="x", pady=2)
+
+    def create_scrollable_panel(
+        self,
+        parent,
+        padx=0,
+        pady=0,
+        canvas_height=None,
+    ):
+        container = ttk.Frame(parent)
+        container.pack(
+            fill="both",
+            expand=True,
+            padx=padx,
+            pady=pady,
+        )
+        canvas = tk.Canvas(container, highlightthickness=0)
+        if canvas_height is not None:
+            canvas.configure(height=canvas_height)
+        scrollbar = ttk.Scrollbar(
+            container,
+            orient="vertical",
+            command=canvas.yview,
+        )
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def update_scroll_region(_event=None):
+            bounds = canvas.bbox("all")
+            content_height = bounds[3] if bounds else 0
+            viewport_height = canvas.winfo_height()
+            canvas.configure(
+                scrollregion=(
+                    0,
+                    0,
+                    max(canvas.winfo_width(), bounds[2] if bounds else 0),
+                    max(content_height, viewport_height),
+                )
+            )
+            if content_height > viewport_height + 1:
+                scrollbar.state(["!disabled"])
+            else:
+                scrollbar.state(["disabled"])
+                canvas.yview_moveto(0)
+
+        def scroll_panel(event):
+            self.scroll_canvas_by_units(
+                canvas,
+                self.get_scroll_direction(event),
+            )
+            return "break"
+
+        canvas.bind("<MouseWheel>", scroll_panel)
+        canvas.bind("<Button-4>", scroll_panel)
+        canvas.bind("<Button-5>", scroll_panel)
+
+        content = ttk.Frame(canvas)
+        canvas_window = canvas.create_window(
+            (0, 0),
+            window=content,
+            anchor="nw",
+        )
+        content.bind(
+            "<Configure>",
+            update_scroll_region,
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda event: (
+                canvas.itemconfigure(
+                    canvas_window,
+                    width=event.width,
+                ),
+                canvas.after_idle(update_scroll_region),
+            ),
+        )
+        return content
+
+    def add_result_modifier_warning(self, parent, value_var):
+        warning_text = (
+            "Para macros com alterador de valor final, são aconselhadas "
+            "habilidades modulares, cujo uso depende de quanto está disposto "
+            "a investir. Dessa maneira, recomenda-se colocar apenas o efeito "
+            "que será multiplicado ou adicionado pelo gasto. Se optar por "
+            "valores fixos, faça um para cada gasto."
+        )
+        tooltip = [None]
+        icon = ttk.Label(
+            parent,
+            text="⚠",
+            foreground="#8a5a00",
+            cursor="question_arrow",
+        )
+
+        def hide_tooltip(_event=None):
+            if tooltip[0] is not None:
+                tooltip[0].destroy()
+                tooltip[0] = None
+
+        def show_tooltip(_event):
+            if tooltip[0] is not None:
+                return
+            popup = tk.Toplevel(parent.winfo_toplevel())
+            popup.wm_overrideredirect(True)
+            popup.wm_geometry(
+                f"+{icon.winfo_rootx()}+"
+                f"{icon.winfo_rooty() + icon.winfo_height()}"
+            )
+            tk.Label(
+                popup,
+                text=warning_text,
+                justify="left",
+                wraplength=420,
+                background="#fff3cd",
+                foreground="#8a5a00",
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=6,
+            ).pack()
+            tooltip[0] = popup
+
+        def update_warning(*_args):
+            if value_var.get().strip():
+                if not icon.winfo_manager():
+                    icon.pack(side="right", padx=(8, 0))
+            else:
+                hide_tooltip()
+                icon.pack_forget()
+
+        icon.bind("<Enter>", show_tooltip)
+        icon.bind("<Leave>", hide_tooltip)
+        value_var.trace_add("write", update_warning)
+        update_warning()
+        return icon
+
+    def make_responsive_grid(
+        self,
+        frame,
+        widgets,
+        minimum_cell_width,
+        maximum_columns=None,
+    ):
+        def layout(event):
+            columns = max(1, event.width // minimum_cell_width)
+            if maximum_columns is not None:
+                columns = min(columns, maximum_columns)
+            for index, widget in enumerate(widgets):
+                widget.grid_configure(
+                    row=index // columns,
+                    column=index % columns,
+                    sticky="ew",
+                )
+            for column in range(columns):
+                frame.columnconfigure(column, weight=1)
+
+        frame.bind("<Configure>", layout)
 
     # ========================================================
     # Painel editor
@@ -2130,6 +2475,106 @@ class MacroBuilderApp:
                 values.append(value)
         return values
 
+    def set_attack_universal_flags(self, index, flags):
+        if index >= len(self.attack_extra_universal_flags):
+            return
+        self.attack_extra_universal_flags[index] = list(flags)
+        self.update_preview()
+
+    def get_attack_universal_conditions(self):
+        conditions = []
+        flags_by_field = getattr(self, "attack_extra_universal_flags", [])
+        for field_index, variable in enumerate(
+            getattr(self, "attack_extra_vars", [])
+        ):
+            flags = (
+                flags_by_field[field_index]
+                if field_index < len(flags_by_field)
+                else []
+            )
+            condition_index = 0
+            for component in split_roll20_components(variable.get()):
+                modified = parse_result_modified_condition(component)
+                question = modified[0] if modified else component
+                if not looks_like_roll20_condition(question):
+                    continue
+                is_universal = (
+                    flags[condition_index]
+                    if condition_index < len(flags)
+                    else False
+                )
+                condition_index += 1
+                if is_universal:
+                    conditions.append(simplify_condition_questions(question))
+        return conditions
+
+    def select_attack_attribute(self, attribute):
+        self.attack_attribute_var.set(attribute)
+
+    def on_attack_attribute_changed(self):
+        self.update_attack_attribute_buttons()
+        self.update_preview()
+
+    def update_attack_attribute_buttons(self):
+        for attribute, button in getattr(
+            self,
+            "attack_attribute_buttons",
+            {},
+        ).items():
+            button.configure(
+                style=(
+                    "Selected.TButton"
+                    if self.attack_attribute_var.get() == attribute
+                    else "TButton"
+                )
+            )
+
+    def toggle_damage_attribute(self, attribute):
+        variable = self.damage_attribute_vars[attribute]
+        variable.set(not variable.get())
+
+    def update_damage_attribute_button(self, attribute):
+        button = getattr(self, "damage_attribute_buttons", {}).get(attribute)
+        if button is not None:
+            button.configure(
+                style=(
+                    "Selected.TButton"
+                    if self.damage_attribute_vars[attribute].get()
+                    else "TButton"
+                )
+            )
+
+    def render_attack_extra_field(self, index):
+        value = self.attack_extra_vars[index].get().strip()
+        is_pride = value == ATTACK_PRIDE_EFFECT
+        entry = self.attack_extra_entries[index]
+        pride_button = self.attack_extra_pride_buttons[index]
+        conditional_button = self.attack_extra_conditional_buttons[index]
+        if is_pride:
+            entry.pack_forget()
+            pride_button.pack(fill="x", before=conditional_button)
+            conditional_button.configure(state="disabled")
+        else:
+            pride_button.pack_forget()
+            entry.pack(fill="x", before=conditional_button)
+            conditional_button.configure(state="normal")
+
+    def remove_attack_pride_effect(self, index):
+        self.attack_extra_vars[index].set("")
+
+    def on_attack_extra_changed(self, index):
+        if index < len(self.attack_extra_universal_flags):
+            self.attack_extra_universal_flags[index] = []
+        if self.attack_extra_vars[index].get().strip() == ATTACK_PRIDE_EFFECT:
+            for other_index, variable in enumerate(self.attack_extra_vars):
+                if (
+                    other_index != index
+                    and variable.get().strip() == ATTACK_PRIDE_EFFECT
+                ):
+                    variable.set("")
+        self.render_attack_extra_field(index)
+        self.update_preview()
+
     def sync_critical_from_damage(self):
         if not hasattr(self, "critical_var"):
             return
@@ -2162,6 +2607,7 @@ class MacroBuilderApp:
         expanded=False,
         expand_on_open=False,
         pady=(0, 8),
+        header_action_variable=None,
     ):
         section = ttk.Frame(parent)
         section.pack(fill="x", pady=pady)
@@ -2184,12 +2630,26 @@ class MacroBuilderApp:
                     expand=expand_on_open,
                 )
 
+        button_parent = section
+        if header_action_variable is not None:
+            button_parent = ttk.Frame(section)
+            button_parent.pack(fill="x")
         button = ttk.Button(
-            section,
+            button_parent,
             text=f"- {title}" if expanded else f"+ {title}",
             command=toggle,
         )
-        button.pack(fill="x")
+        button.pack(
+            side="left" if button_parent is not section else "top",
+            fill="x",
+            expand=button_parent is not section,
+        )
+        if header_action_variable is not None:
+            ttk.Checkbutton(
+                button_parent,
+                text="Condição Universal",
+                variable=header_action_variable,
+            ).pack(side="right", padx=(8, 0))
 
         if expanded:
             content.pack(fill="x", pady=(2, 0))
@@ -2285,6 +2745,7 @@ class MacroBuilderApp:
             tk.StringVar(),
             tk.StringVar(),
         ]
+        self.attack_extra_universal_flags = [[], [], []]
         ttk.Checkbutton(
             attack_box,
             text="Efeito extra",
@@ -2305,28 +2766,52 @@ class MacroBuilderApp:
             sticky="ew",
         )
 
+        attack_extra_fields = []
+        self.attack_extra_entries = []
+        self.attack_extra_pride_buttons = []
+        self.attack_extra_conditional_buttons = []
         for idx, var in enumerate(self.attack_extra_vars):
             field_frame = ttk.Frame(self.attack_extra_frame)
-            field_frame.grid(
-                row=0,
-                column=idx,
-                sticky="ew",
-                padx=(0, 6),
-            )
-            ttk.Entry(
+            field_frame.grid(row=0, column=idx, sticky="ew", padx=(0, 6))
+            attack_extra_fields.append(field_frame)
+            entry = ttk.Entry(
                 field_frame,
                 textvariable=var,
                 width=20,
-            ).pack(fill="x")
-            ttk.Button(
+            )
+            entry.pack(fill="x")
+            pride_button = ttk.Button(
+                field_frame,
+                text="👑 Orgulho",
+                style="Pride.TButton",
+                command=lambda index=idx: self.remove_attack_pride_effect(
+                    index
+                ),
+            )
+            conditional_button = ttk.Button(
                 field_frame,
                 text="Condicional?",
                 command=lambda index=idx: self.insert_attack_conditional(index),
-            ).pack(fill="x", pady=(3, 0))
-            var.trace_add("write", lambda *_: self.update_preview())
+            )
+            conditional_button.pack(fill="x", pady=(3, 0))
+            self.attack_extra_entries.append(entry)
+            self.attack_extra_pride_buttons.append(pride_button)
+            self.attack_extra_conditional_buttons.append(
+                conditional_button
+            )
+            var.trace_add(
+                "write",
+                lambda *_args, index=idx: self.on_attack_extra_changed(
+                    index
+                ),
+            )
+            self.render_attack_extra_field(idx)
 
-        for idx in range(len(self.attack_extra_vars)):
-            self.attack_extra_frame.columnconfigure(idx, weight=1)
+        self.make_responsive_grid(
+            self.attack_extra_frame,
+            attack_extra_fields,
+            minimum_cell_width=190,
+        )
 
         self.attack_extra_frame.grid_remove()
         self.toggle_attack_extra_field()
@@ -2359,29 +2844,39 @@ class MacroBuilderApp:
         attribute_frame.grid(
             row=7,
             column=0,
-            sticky="w"
+            columnspan=2,
+            sticky="ew",
         )
 
+        attack_attribute_buttons = []
+        self.attack_attribute_buttons = {}
         for attribute in [
             "Luta",
             "Pontaria",
             "Atuação",
             "Furtividade"
         ]:
-            ttk.Radiobutton(
+            button = ttk.Button(
                 attribute_frame,
                 text=attribute,
-                variable=self.attack_attribute_var,
-                value=attribute
-            ).pack(
-                side="left",
-                padx=(0, 8)
+                command=lambda selected=attribute: self.select_attack_attribute(
+                    selected
+                ),
+                padding=(10, 6),
             )
+            attack_attribute_buttons.append(button)
+            self.attack_attribute_buttons[attribute] = button
+        self.make_responsive_grid(
+            attribute_frame,
+            attack_attribute_buttons,
+            minimum_cell_width=100,
+        )
 
         self.attack_attribute_var.trace_add(
             "write",
-            lambda *_: self.update_preview()
+            lambda *_: self.on_attack_attribute_changed(),
         )
+        self.update_attack_attribute_buttons()
 
         attack_box.columnconfigure(
             0,
@@ -2417,8 +2912,9 @@ class MacroBuilderApp:
             pady=(0, 6)
         )
 
+        common_dice_buttons = []
         for index, (label, value) in enumerate(DADOSCOMUNS.items()):
-            ttk.Button(
+            button = ttk.Button(
                 common_dice_frame,
                 text=label,
                 width=6,
@@ -2427,13 +2923,20 @@ class MacroBuilderApp:
                     self.damage_var,
                     v
                 )
-            ).grid(
+            )
+            button.grid(
                 row=0,
                 column=index,
                 sticky="w",
                 padx=(0, 4),
                 pady=2
             )
+            common_dice_buttons.append(button)
+        self.make_responsive_grid(
+            common_dice_frame,
+            common_dice_buttons,
+            minimum_cell_width=58,
+        )
 
         ttk.Checkbutton(
             damage_box,
@@ -2460,8 +2963,9 @@ class MacroBuilderApp:
         )
 
         exotic_values = list(DADOSEXOTICOS.items())
+        exotic_dice_buttons = []
         for index, (label, value) in enumerate(exotic_values):
-            ttk.Button(
+            button = ttk.Button(
                 self.damage_exotic_frame,
                 text=label,
                 width=6,
@@ -2470,13 +2974,20 @@ class MacroBuilderApp:
                     self.damage_var,
                     v
                 )
-            ).grid(
+            )
+            button.grid(
                 row=index // 7,
                 column=index % 7,
                 sticky="w",
                 padx=(0, 4),
                 pady=2
             )
+            exotic_dice_buttons.append(button)
+        self.make_responsive_grid(
+            self.damage_exotic_frame,
+            exotic_dice_buttons,
+            minimum_cell_width=58,
+        )
 
         self.toggle_exotic_dice_field()
 
@@ -2553,18 +3064,38 @@ class MacroBuilderApp:
         damage_attr_frame.grid(
             row=5,
             column=0,
-            sticky="w"
+            sticky="ew"
         )
 
+        damage_attribute_buttons = []
+        self.damage_attribute_buttons = {}
         for attribute in ATTRIBUTES.keys():
-            ttk.Checkbutton(
+            button = ttk.Button(
                 damage_attr_frame,
                 text=attribute,
-                variable=self.damage_attribute_vars[attribute],
-            ).pack(side="left", padx=(0, 8), anchor="w")
+                command=lambda selected=attribute: self.toggle_damage_attribute(
+                    selected
+                ),
+                padding=(10, 6),
+            )
+            damage_attribute_buttons.append(button)
+            self.damage_attribute_buttons[attribute] = button
+        self.make_responsive_grid(
+            damage_attr_frame,
+            damage_attribute_buttons,
+            minimum_cell_width=100,
+        )
 
-        for attribute_var in self.damage_attribute_vars.values():
-            attribute_var.trace_add("write", lambda *_: self.update_preview())
+        for attribute, attribute_var in self.damage_attribute_vars.items():
+            attribute_var.trace_add(
+                "write",
+                lambda *_args, selected=attribute: (
+                    self.update_damage_attribute_button(selected),
+                    self.update_preview(),
+                ),
+            )
+        for attribute in self.damage_attribute_vars:
+            self.update_damage_attribute_button(attribute)
 
         self.damage_extra_enabled_var = tk.BooleanVar(value=False)
         self.damage_extra_vars = [
@@ -2592,14 +3123,11 @@ class MacroBuilderApp:
             sticky="ew"
         )
 
+        damage_extra_fields = []
         for idx, var in enumerate(self.damage_extra_vars):
             field_frame = ttk.Frame(self.damage_extra_frame)
-            field_frame.grid(
-                row=0,
-                column=idx,
-                sticky="ew",
-                padx=(0, 6)
-            )
+            field_frame.grid(row=0, column=idx, sticky="ew", padx=(0, 6))
+            damage_extra_fields.append(field_frame)
             ttk.Entry(
                 field_frame,
                 textvariable=var,
@@ -2612,8 +3140,11 @@ class MacroBuilderApp:
             ).pack(fill="x", pady=(3, 0))
             var.trace_add("write", lambda *_: self.update_preview())
 
-        for idx in range(len(self.damage_extra_vars)):
-            self.damage_extra_frame.columnconfigure(idx, weight=1)
+        self.make_responsive_grid(
+            self.damage_extra_frame,
+            damage_extra_fields,
+            minimum_cell_width=190,
+        )
 
         self.damage_extra_frame.grid_remove()
         self.toggle_damage_extra_field()
@@ -2742,100 +3273,6 @@ class MacroBuilderApp:
     # Painel preview
     # ========================================================
 
-    def build_preview_panel(self, parent):
-        ttk.Label(
-            parent,
-            text="Macro gerada",
-            style="Section.TLabel"
-        ).pack(anchor="w", pady=(0, 8))
-
-        macro_toolbar = ttk.Frame(parent)
-        macro_toolbar.pack(fill="x", pady=(0, 4))
-        ttk.Button(
-            macro_toolbar,
-            text="Atualizar",
-            command=self.update_preview
-        ).pack(side="left")
-        ttk.Button(
-            macro_toolbar,
-            text="Copiar macro",
-            command=self.copy_macro
-        ).pack(side="left", padx=6)
-
-        self.duplicate_condition_warning_var = tk.StringVar(value="")
-        ttk.Label(
-            parent,
-            textvariable=self.duplicate_condition_warning_var,
-            foreground="#b3261e",
-            wraplength=460,
-        ).pack(anchor="w", fill="x", pady=(0, 4))
-
-        preview_split = ttk.PanedWindow(parent, orient="vertical")
-        preview_split.pack(fill="both", expand=True)
-
-        macro_panel = ttk.Frame(preview_split)
-        card_panel = ttk.Frame(preview_split)
-        preview_split.add(macro_panel, weight=3)
-        preview_split.add(card_panel, weight=2)
-
-        self.preview = tk.Text(
-            macro_panel,
-            wrap="char",
-            font=("Consolas", 10)
-        )
-        self.preview.pack(
-            fill="both",
-            expand=True
-        )
-
-        card_toolbar = ttk.Frame(card_panel)
-        card_toolbar.pack(fill="x", pady=(8, 4))
-        ttk.Label(
-            card_toolbar,
-            text="Prévia do Roll20",
-            style="Section.TLabel",
-        ).pack(side="left")
-
-        self.roll_preview_critical_var = tk.BooleanVar(value=False)
-        preview_mode = ttk.Frame(card_toolbar)
-        preview_mode.pack(side="right")
-        for label, value in (("Normal", False), ("Crítico", True)):
-            ttk.Radiobutton(
-                preview_mode,
-                text=label,
-                variable=self.roll_preview_critical_var,
-                value=value,
-                command=self.draw_roll_preview,
-            ).pack(side="left", padx=(6, 0))
-
-        card_frame = ttk.Frame(card_panel)
-        card_frame.pack(fill="both", expand=True)
-        self.roll_preview_canvas = tk.Canvas(
-            card_frame,
-            background="#d3e5f5",
-            highlightthickness=0,
-        )
-        card_scrollbar = ttk.Scrollbar(
-            card_frame,
-            orient="vertical",
-            command=self.roll_preview_canvas.yview,
-        )
-        self.roll_preview_canvas.configure(yscrollcommand=card_scrollbar.set)
-        self.roll_preview_canvas.pack(side="left", fill="both", expand=True)
-        card_scrollbar.pack(side="right", fill="y")
-        self.roll_preview_canvas.bind(
-            "<Configure>",
-            lambda _event: self.draw_roll_preview(),
-        )
-
-        bottom = ttk.Frame(parent)
-        bottom.pack(fill="x", pady=(8, 0))
-        ttk.Button(
-            bottom,
-            text="Limpar",
-            command=self.clear_all
-        ).pack(side="right")
-
     def get_roll_preview_data(self):
         attack_var = getattr(self, "attack_roll_var", None)
         attack_formula = attack_var.get().strip() if attack_var else ""
@@ -2865,17 +3302,23 @@ class MacroBuilderApp:
             if variable.get()
         ]
         damage_extras = self.get_damage_extra_values()
+        universal_conditions = self.get_attack_universal_conditions()
         damage_choices = get_preview_question_choices(
             damage_formula,
             *damage_extras,
+            *self.get_attack_extra_values(),
         )
         damage_base_formula = build_damage_roll_formula(
             damage_formula,
             damage_attributes,
+            universal_conditions,
         )
 
         critical_var = getattr(self, "critical_var", None)
         critical_formula = critical_var.get().strip() if critical_var else ""
+        critical_universal_conditions = (
+            universal_conditions if critical_formula else []
+        )
         critical_extras = [
             simplify_condition_questions(value)
             for value in damage_extras
@@ -2883,6 +3326,7 @@ class MacroBuilderApp:
         critical_base_formula = build_damage_roll_formula(
             critical_formula,
             damage_attributes if critical_formula else [],
+            critical_universal_conditions,
         )
         name_var = getattr(self, "attack_name_var", None)
         type_var = getattr(self, "damage_type_var", None)
@@ -2918,317 +3362,6 @@ class MacroBuilderApp:
             "damage_type": type_var.get().strip() if type_var else "",
             "description": self.get_description(),
         }
-
-    def draw_roll_preview(self):
-        canvas = getattr(self, "roll_preview_canvas", None)
-        if canvas is None or not canvas.winfo_exists():
-            return
-
-        canvas.delete("all")
-        width = max(canvas.winfo_width(), 260)
-        card_width = min(width - 24, 440)
-        card_left = max((width - card_width) / 2, 8)
-        card_right = card_left + card_width
-        center_x = (card_left + card_right) / 2
-        top = 14
-        content_y = top + 14
-        data = self.get_roll_preview_data()
-        card_background = canvas.create_rectangle(
-            card_left,
-            top,
-            card_right,
-            top + 1000,
-            fill="white",
-            outline="",
-        )
-
-        def add_text(text, x, y, wrap_width, font, fill="#111111", justify="center"):
-            item = canvas.create_text(
-                x,
-                y,
-                text=text,
-                width=wrap_width,
-                font=font,
-                fill=fill,
-                justify=justify,
-                anchor="n",
-            )
-            bounds = canvas.bbox(item)
-            return bounds[3] if bounds else y
-
-        content_y = add_text(
-            data["character"].upper(),
-            center_x,
-            content_y,
-            card_width - 24,
-            ("PT Sans", 10, "bold"),
-        ) + 3
-        content_y = add_text(
-            data["name"] or "Ataque",
-            center_x,
-            content_y,
-            card_width - 24,
-            ("PT Sans", 11, "italic"),
-        ) + 7
-
-        column_width = (card_width - 30) / 2
-        left_center = card_left + 10 + column_width / 2
-        right_center = card_right - 10 - column_width / 2
-        def add_roll_box(text, center, y, max_width, fill="#FEF68E", outline="#d69e00"):
-            text_item = canvas.create_text(
-                center,
-                y + 5,
-                text=text,
-                width=max_width - 12,
-                font=("Helvetica Neue", 15, "bold"),
-                fill="#111111",
-                justify="center",
-                anchor="n",
-            )
-            bounds = canvas.bbox(text_item)
-            if not bounds:
-                return y + 28
-            box_left = max(center - max_width / 2, bounds[0] - 7)
-            box_right = min(center + max_width / 2, bounds[2] + 7)
-            box_top = bounds[1] - 5
-            box_bottom = bounds[3] + 5
-            box = canvas.create_rectangle(
-                box_left,
-                box_top,
-                box_right,
-                box_bottom,
-                fill=fill,
-                outline=outline,
-                width=1,
-            )
-            canvas.tag_raise(text_item, box)
-            return box_bottom
-
-        attack_fill = "#ffcc80" if data["critical"] else "#FEF68E"
-        attack_outline = "#3fb315" if data["critical"] else "#d69e00"
-        attack_bottom = add_roll_box(
-            data["attack"],
-            left_center,
-            content_y,
-            column_width - 8,
-            fill=attack_fill,
-            outline=attack_outline,
-        )
-
-        damage_left = center_x + 8
-        damage_right = card_right - 10
-        damage_specs = []
-        for roll_value in data["damage_rolls"]:
-            probe = canvas.create_text(
-                0,
-                0,
-                text=roll_value,
-                font=("Helvetica Neue", 15, "bold"),
-                fill="#111111",
-                anchor="nw",
-            )
-            bounds = canvas.bbox(probe)
-            canvas.delete(probe)
-            text_width = bounds[2] - bounds[0] if bounds else 20
-            text_height = bounds[3] - bounds[1] if bounds else 18
-            damage_specs.append(
-                (roll_value, max(36, text_width + 14), text_height + 12)
-            )
-
-        gap = 5
-        group_width = sum(box_width for _, box_width, _ in damage_specs)
-        group_width += gap * max(0, len(damage_specs) - 1)
-        damage_x = max(damage_left, right_center - group_width / 2)
-        damage_y = content_y
-        damage_row_height = 0
-        damage_bottom = content_y
-        for roll_value, box_width, box_height in damage_specs:
-            if damage_x + box_width > damage_right and damage_x > damage_left:
-                damage_y += damage_row_height + 7
-                damage_x = damage_left
-                damage_row_height = 0
-            box = canvas.create_rectangle(
-                damage_x,
-                damage_y,
-                damage_x + box_width,
-                damage_y + box_height,
-                fill="#FEF68E",
-                outline="#d69e00",
-                width=1,
-            )
-            probe = canvas.create_text(
-                damage_x + box_width / 2,
-                damage_y + 6,
-                text=roll_value,
-                width=box_width - 14,
-                font=("Helvetica Neue", 15, "bold"),
-                fill="#111111",
-                justify="center",
-                anchor="n",
-            )
-            canvas.tag_raise(probe, box)
-            damage_row_height = max(damage_row_height, box_height)
-            damage_bottom = max(damage_bottom, damage_y + damage_row_height)
-            damage_x += box_width + gap
-
-        row_bottom = max(attack_bottom, damage_bottom)
-        canvas.create_line(
-            center_x,
-            content_y + 2,
-            center_x,
-            row_bottom + 26,
-            fill="#111111",
-        )
-        add_text(
-            "Ataque",
-            left_center,
-            row_bottom + 4,
-            column_width - 8,
-            ("PT Sans", 10),
-        )
-        damage_label = "Dano (Crítico)" if data["critical"] else "Dano"
-        add_text(
-            damage_label,
-            right_center,
-            row_bottom + 4,
-            column_width - 8,
-            ("PT Sans", 10),
-            fill="#287a38" if data["critical"] else "#111111",
-        )
-        content_y = row_bottom + 25
-
-        if data["damage_type"]:
-            content_y = add_text(
-                data["damage_type"],
-                center_x,
-                content_y,
-                card_width - 24,
-                ("PT Sans", 11, "italic"),
-            ) + 4
-
-        description = data["description"].strip()
-        if description:
-            description_left = card_left + 14
-            description_width = card_width - 28
-            description_y = content_y + 4
-            description_background = canvas.create_rectangle(
-                description_left,
-                description_y,
-                description_left + description_width,
-                description_y + 1000,
-                fill="#fdf8ab",
-                outline="",
-            )
-            text_font = tkfont.Font(root=canvas, font=("Helvetica Neue", 10))
-            button_font = tkfont.Font(root=canvas, font=("Helvetica Neue", 10, "bold"))
-            content_left = description_left + 7
-            content_right = description_left + description_width - 7
-            cursor_x = content_left
-            cursor_y = description_y + 6
-            base_line_height = text_font.metrics("linespace") + 2
-            row_height = base_line_height
-
-            def next_description_line():
-                nonlocal cursor_x, cursor_y, row_height
-                cursor_x = content_left
-                cursor_y += row_height + 2
-                row_height = base_line_height
-
-            for part_type, value in split_macro_button_markup(description):
-                if part_type == "button":
-                    button_width = min(
-                        button_font.measure(value) + 16,
-                        content_right - content_left,
-                    )
-                    button_text = canvas.create_text(
-                        0,
-                        0,
-                        text=value,
-                        width=max(1, button_width - 12),
-                        font=("Helvetica Neue", 10, "bold"),
-                        fill="white",
-                        justify="center",
-                        anchor="nw",
-                    )
-                    button_bounds = canvas.bbox(button_text)
-                    button_height = max(
-                        base_line_height + 4,
-                        (button_bounds[3] - button_bounds[1] + 8)
-                        if button_bounds else base_line_height + 4,
-                    )
-                    if cursor_x + button_width > content_right and cursor_x > content_left:
-                        next_description_line()
-                    button_top = cursor_y - 2
-                    button_background = canvas.create_rectangle(
-                        cursor_x,
-                        button_top,
-                        cursor_x + button_width,
-                        button_top + button_height,
-                        fill="#d80b9b",
-                        outline="#d80b9b",
-                    )
-                    canvas.coords(
-                        button_text,
-                        cursor_x + 6,
-                        button_top + 4,
-                    )
-                    canvas.tag_raise(button_text, button_background)
-                    cursor_x += button_width + 4
-                    row_height = max(row_height, button_height + 2)
-                    continue
-
-                segments = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-                for segment_index, segment in enumerate(segments):
-                    if segment_index > 0 and cursor_x > content_left:
-                        next_description_line()
-                    for token in re.findall(r"\s+|\S+", segment):
-                        if token.isspace():
-                            if cursor_x == content_left:
-                                continue
-                            token_width = text_font.measure(token)
-                            if cursor_x + token_width > content_right:
-                                next_description_line()
-                            else:
-                                cursor_x += token_width
-                            continue
-
-                        token_width = text_font.measure(token)
-                        if cursor_x + token_width > content_right and cursor_x > content_left:
-                            next_description_line()
-                        text_item = canvas.create_text(
-                            cursor_x,
-                            cursor_y,
-                            text=token,
-                            font=("Helvetica Neue", 10),
-                            fill="#111111",
-                            anchor="nw",
-                        )
-                        bounds = canvas.bbox(text_item)
-                        if bounds:
-                            row_height = max(row_height, bounds[3] - cursor_y)
-                        cursor_x += token_width
-
-            description_bottom = cursor_y + row_height + 6
-            canvas.coords(
-                description_background,
-                description_left,
-                description_y,
-                description_left + description_width,
-                description_bottom,
-            )
-            content_y = description_bottom + 6
-
-        card_bottom = max(content_y + 8, top + 100)
-        canvas.coords(
-            card_background,
-            card_left,
-            top,
-            card_right,
-            card_bottom,
-        )
-        canvas.itemconfigure(card_background, outline="black", width=2)
-        canvas.configure(scrollregion=(0, 0, width, card_bottom + 14))
-        canvas.yview_moveto(0)
 
     # ========================================================
     # Construção da macro
@@ -3270,6 +3403,7 @@ class MacroBuilderApp:
             additional_damage_formula,
         )
         extra_values = self.get_damage_extra_values()
+        universal_conditions = self.get_attack_universal_conditions()
         damage_attribute_vars = getattr(self, "damage_attribute_vars", {})
         damage_attributes = [
             ATTRIBUTES[attribute]
@@ -3280,10 +3414,14 @@ class MacroBuilderApp:
             damage_formula,
             extra_values,
             damage_attributes,
+            universal_conditions,
         )
 
         critical_var = getattr(self, "critical_var", None)
         critical_formula = critical_var.get().strip() if critical_var else ""
+        critical_universal_conditions = (
+            universal_conditions if critical_formula else []
+        )
         critical_extra_values = [
             simplify_condition_questions(value)
             for value in extra_values
@@ -3292,6 +3430,7 @@ class MacroBuilderApp:
             critical_formula,
             critical_extra_values,
             damage_attributes if critical_formula else [],
+            critical_universal_conditions,
         )
 
         damage_type_var = getattr(self, "damage_type_var", None)
@@ -3402,7 +3541,7 @@ class MacroBuilderApp:
     def open_common_weapons_dialog(self):
         win = tk.Toplevel(self.root)
         win.title("Armas comuns")
-        win.geometry("320x300")
+        set_responsive_window_geometry(win, 320, 300, 280, 220)
         win.transient(self.root)
         win.grab_set()
 
@@ -3412,15 +3551,20 @@ class MacroBuilderApp:
             style="Section.TLabel"
         ).pack(anchor="w", padx=15, pady=(15, 8))
 
+        weapon_buttons_frame = self.create_scrollable_panel(
+            win,
+            padx=15,
+            pady=(0, 12),
+        )
         for weapon_name in COMMON_WEAPONS:
             ttk.Button(
-                win,
+                weapon_buttons_frame,
                 text=weapon_name,
                 command=lambda name=weapon_name: self.apply_common_weapon(
                     name,
                     win,
                 ),
-            ).pack(fill="x", padx=15, pady=3)
+            ).pack(fill="x", pady=3)
 
     def apply_common_weapon(self, weapon_name, window):
         weapon = COMMON_WEAPONS[weapon_name]
@@ -3457,7 +3601,7 @@ class MacroBuilderApp:
     def insert_fixed_bonus(self):
         win = tk.Toplevel(self.root)
         win.title("Calculador de Passos de Dano")
-        win.geometry("760x400")
+        set_responsive_window_geometry(win, 760, 400, 480, 300)
         win.transient(self.root)
         win.grab_set()
 
@@ -3488,8 +3632,12 @@ class MacroBuilderApp:
             )
             die_choice_buttons.append((button, value))
 
-        for column in range(7):
-            dice_frame.columnconfigure(column, weight=1)
+        self.make_responsive_grid(
+            dice_frame,
+            [button for button, _value in die_choice_buttons],
+            minimum_cell_width=78,
+            maximum_columns=7,
+        )
 
         controls = ttk.Frame(win)
         controls.pack(fill="x", expand=True, padx=18, pady=(16, 14))
@@ -3581,6 +3729,12 @@ class MacroBuilderApp:
         self.insert_question(
             target_var=self.attack_extra_vars[index],
             conditional=True,
+            allow_pride=True,
+            universal_flags=self.attack_extra_universal_flags[index],
+            on_universal_flags=lambda flags: self.set_attack_universal_flags(
+                index,
+                flags,
+            ),
         )
 
     def insert_condition_components(
@@ -3588,6 +3742,9 @@ class MacroBuilderApp:
         target_var,
         wrap_conditional_values,
         wrap_advanced_values,
+        allow_pride=False,
+        universal_flags=None,
+        on_universal_flags=None,
     ):
         source = target_var.get().strip() if target_var is not None else ""
         source, recovered_syntax = close_advanced_questions_before_outer_pipe(
@@ -3597,6 +3754,12 @@ class MacroBuilderApp:
         syntax_error = False
 
         for component_text in split_roll20_components(source):
+            result_modifier = parse_result_modified_condition(component_text)
+            effect_value = ""
+            effect_mode = "multiplicativo"
+            if result_modifier is not None:
+                component_text, effect_value, effect_mode = result_modifier
+
             if not looks_like_roll20_condition(component_text):
                 components.append({"type": "fixed", "value": component_text})
                 continue
@@ -3632,10 +3795,22 @@ class MacroBuilderApp:
 
             if syntax_error:
                 break
+            condition_index = sum(
+                item["type"] == "condition"
+                for item in components
+            )
             components.append({
                 "type": "condition",
                 "name": name,
                 "options": loaded_options,
+                "effect_value": effect_value,
+                "effect_mode": effect_mode,
+                "universal": (
+                    universal_flags[condition_index]
+                    if universal_flags
+                    and condition_index < len(universal_flags)
+                    else False
+                ),
             })
 
         if syntax_error:
@@ -3662,12 +3837,19 @@ class MacroBuilderApp:
                 for component in components
                 if component["type"] == "fixed"
             ]
-            components = [{"type": "condition", "name": "Condição", "options": None}]
+            components = [{
+                "type": "condition",
+                "name": "Condição",
+                "options": None,
+                "effect_value": "",
+                "effect_mode": "multiplicativo",
+                "universal": False,
+            }]
             components.extend(fixed_components)
 
         win = tk.Toplevel(self.root)
         win.title("Condição")
-        win.geometry("760x620")
+        set_responsive_window_geometry(win, 760, 620, 520, 400)
         win.transient(self.root)
         win.grab_set()
 
@@ -3676,6 +3858,14 @@ class MacroBuilderApp:
             text="Condicionais e valores adicionais:",
             style="Section.TLabel",
         ).pack(anchor="w", padx=15, pady=(15, 4))
+
+        if allow_pride:
+            ttk.Button(
+                win,
+                text="👑 Orgulho",
+                style="Pride.TButton",
+                command=lambda: insert_pride_effect(),
+            ).pack(anchor="w", padx=15, pady=(0, 6))
 
         if status_text:
             ttk.Label(
@@ -3713,32 +3903,82 @@ class MacroBuilderApp:
         ).pack(anchor="w")
         fixed_fields_frame = ttk.Frame(fixed_section)
         fixed_fields_frame.pack(fill="x", pady=(2, 0))
+
+        def update_condition_scroll_region(_event=None):
+            bounds = canvas.bbox("all")
+            content_height = bounds[3] if bounds else 0
+            viewport_height = canvas.winfo_height()
+            canvas.configure(
+                scrollregion=(
+                    0,
+                    0,
+                    max(canvas.winfo_width(), bounds[2] if bounds else 0),
+                    max(content_height, viewport_height),
+                )
+            )
+            if content_height > viewport_height + 1:
+                scrollbar.state(["!disabled"])
+            else:
+                scrollbar.state(["disabled"])
+                canvas.yview_moveto(0)
+
         component_frame.bind(
             "<Configure>",
-            lambda _event: canvas.configure(
-                scrollregion=canvas.bbox("all")
-            ),
+            update_condition_scroll_region,
         )
         canvas.bind(
             "<Configure>",
-            lambda event: canvas.itemconfigure(
-                canvas_window,
-                width=event.width,
+            lambda event: (
+                canvas.itemconfigure(canvas_window, width=event.width),
+                canvas.after_idle(update_condition_scroll_region),
             ),
         )
 
         editor_components = []
 
+        def update_condition_component_titles():
+            condition_number = 0
+            for component in editor_components:
+                if component["type"] != "condition":
+                    continue
+                condition_number += 1
+                prefix = (
+                    "+"
+                    if component["header_button"].cget("text").startswith("+")
+                    else "-"
+                )
+                component["header_button"].configure(
+                    text=f"{prefix} Condição {condition_number}"
+                )
+
+        def remove_condition_component(component):
+            component["frame"].destroy()
+            editor_components.remove(component)
+            update_condition_component_titles()
+
         def add_condition_component(initial=None):
-            condition_number = sum(
-                component["type"] == "condition"
-                for component in editor_components
-            ) + 1
+            universal_var = tk.BooleanVar(
+                value=initial.get("universal", False) if initial else False
+            )
             content = self.create_toggle_section(
                 condition_frame,
-                f"Condição {condition_number}",
+                "Condição",
                 expanded=True,
                 pady=(0, 5),
+                header_action_variable=(
+                    universal_var if allow_pride else None
+                ),
+            )
+            section = content.master
+            header_button = next(
+                header_child
+                for child in section.winfo_children()
+                for header_child in child.winfo_children()
+                if isinstance(header_child, ttk.Button)
+            ) if allow_pride else next(
+                child
+                for child in section.winfo_children()
+                if isinstance(child, ttk.Button)
             )
             initial_options = initial["options"] if initial else None
             name_var = tk.StringVar(
@@ -3753,6 +3993,110 @@ class MacroBuilderApp:
             options_frame = ttk.Frame(content)
             options_frame.pack(fill="x", pady=(2, 2))
             rows = []
+            effect_value_var = tk.StringVar(
+                value=initial.get("effect_value", "") if initial else ""
+            )
+            effect_mode_var = tk.StringVar(
+                value=(
+                    initial.get("effect_mode", "multiplicativo")
+                    if initial
+                    else "multiplicativo"
+                )
+            )
+
+            component = {
+                "type": "condition",
+                "name": name_var,
+                "rows": rows,
+                "frame": section,
+                "header_button": header_button,
+                "effect_value": effect_value_var,
+                "effect_mode": effect_mode_var,
+                "universal": universal_var,
+            }
+            editor_components.append(component)
+            ttk.Button(
+                content,
+                text="×",
+                width=2,
+                command=lambda: remove_condition_component(component),
+            ).pack(anchor="e", before=next(iter(content.winfo_children())))
+
+            effect_frame = ttk.LabelFrame(
+                content,
+                text="Condicional com alterador de resultado",
+                padding=8,
+            )
+            effect_frame.pack(fill="x", pady=(8, 0))
+            ttk.Label(effect_frame, text="Valor:").pack(side="left")
+            ttk.Entry(
+                effect_frame,
+                textvariable=effect_value_var,
+                width=16,
+            ).pack(side="left", padx=(5, 10))
+            ttk.Radiobutton(
+                effect_frame,
+                text="Multiplicativo",
+                variable=effect_mode_var,
+                value="multiplicativo",
+            ).pack(side="left", padx=(0, 8))
+            ttk.Radiobutton(
+                effect_frame,
+                text="Aditivo",
+                variable=effect_mode_var,
+                value="aditivo",
+            ).pack(side="left")
+
+            modifier_tooltip = [None]
+            info_button = ttk.Label(
+                effect_frame,
+                text="ⓘ",
+                cursor="question_arrow",
+                foreground="#286090",
+            )
+            info_button.pack(side="right", padx=(8, 0))
+            tooltip_text = (
+                "Valor multiplicativo irá multiplicar a quantidade "
+                "adicionada, pelo valor adicionado, seja em dados, ou valor "
+                "fixo. Valor Aditivo é recomendado para modularidade de "
+                'Dados, onde é dado um dado "d6" e esse dado será rolado '
+                "quantas vezes forem investidos ao usar a macro."
+            )
+
+            def show_modifier_tooltip(_event):
+                if modifier_tooltip[0] is not None:
+                    return
+                tooltip = tk.Toplevel(win)
+                tooltip.wm_overrideredirect(True)
+                tooltip.wm_geometry(
+                    f"+{info_button.winfo_rootx()}+"
+                    f"{info_button.winfo_rooty() + info_button.winfo_height()}"
+                )
+                tk.Label(
+                    tooltip,
+                    text=tooltip_text,
+                    justify="left",
+                    wraplength=380,
+                    background="#fff8dc",
+                    foreground="#333333",
+                    relief="solid",
+                    borderwidth=1,
+                    padx=8,
+                    pady=6,
+                ).pack()
+                modifier_tooltip[0] = tooltip
+
+            def hide_modifier_tooltip(_event):
+                if modifier_tooltip[0] is not None:
+                    modifier_tooltip[0].destroy()
+                    modifier_tooltip[0] = None
+
+            info_button.bind("<Enter>", show_modifier_tooltip)
+            info_button.bind("<Leave>", hide_modifier_tooltip)
+            self.add_result_modifier_warning(effect_frame, effect_value_var)
+            def remove_row(row_data):
+                rows.remove(row_data)
+                row_data["container"].destroy()
 
             def add_row(label="", value="", advanced_data=None):
                 row_container = ttk.Frame(options_frame)
@@ -3788,13 +4132,25 @@ class MacroBuilderApp:
                 )
                 nested_frame = ttk.Frame(row_container)
                 nested_options = []
-                add_button_holder = [None]
+                nested_rows = []
+                nested_add_button = ttk.Button(
+                    nested_frame,
+                    text="+ Campo",
+                    command=lambda: add_nested_option(),
+                )
+
+                def remove_nested_option(nested_option):
+                    nested_options.remove(nested_option["variables"])
+                    nested_rows.remove(nested_option)
+                    nested_option["frame"].destroy()
 
                 def add_nested_option():
-                    if add_button_holder[0]:
-                        add_button_holder[0].destroy()
                     nested_row = ttk.Frame(nested_frame)
-                    nested_row.pack(fill="x", pady=(2, 0))
+                    nested_row.pack(
+                        fill="x",
+                        pady=(2, 0),
+                        before=nested_add_button,
+                    )
                     option_number = len(nested_options) + 1
                     nested_label_var = tk.StringVar(
                         value=f"Nome {option_number}"
@@ -3802,6 +4158,16 @@ class MacroBuilderApp:
                     nested_value_var = tk.StringVar(
                         value=f"Valor {option_number}"
                     )
+                    nested_option = {
+                        "frame": nested_row,
+                        "variables": (nested_label_var, nested_value_var),
+                    }
+                    ttk.Button(
+                        nested_row,
+                        text="×",
+                        width=2,
+                        command=lambda: remove_nested_option(nested_option),
+                    ).pack(side="left", padx=(0, 4))
                     ttk.Entry(
                         nested_row,
                         textvariable=nested_label_var,
@@ -3812,16 +4178,10 @@ class MacroBuilderApp:
                         textvariable=nested_value_var,
                         width=15,
                     ).pack(side="left", padx=(5, 0))
-                    add_button_holder[0] = ttk.Button(
-                        nested_row,
-                        text="+ Campo",
-                        command=add_nested_option,
-                    )
-                    add_button_holder[0].pack(side="left", padx=(5, 0))
-                    nested_options.append(
-                        (nested_label_var, nested_value_var)
-                    )
+                    nested_options.append(nested_option["variables"])
+                    nested_rows.append(nested_option)
 
+                nested_add_button.pack(anchor="w", pady=(2, 0))
                 add_nested_option()
                 advanced_check = ttk.Checkbutton(
                     row,
@@ -3864,8 +4224,15 @@ class MacroBuilderApp:
                     "advanced": advanced_var,
                     "advanced_name": advanced_name_var,
                     "nested_options": nested_options,
+                    "container": row_container,
                 }
                 rows.append(row_data)
+                ttk.Button(
+                    row,
+                    text="×",
+                    width=2,
+                    command=lambda: remove_row(row_data),
+                ).pack(side="left", before=next(iter(row.winfo_children())))
                 if advanced_data:
                     advanced_name, advanced_options = advanced_data
                     advanced_var.set(True)
@@ -3892,12 +4259,7 @@ class MacroBuilderApp:
                 text="+ Adicionar opção",
                 command=add_row,
             ).pack(anchor="w", pady=(3, 0))
-            component = {
-                "type": "condition",
-                "name": name_var,
-                "rows": rows,
-            }
-            editor_components.append(component)
+            update_condition_component_titles()
             return component
 
         def add_fixed_component(value=""):
@@ -4007,9 +4369,11 @@ class MacroBuilderApp:
                     )
 
                 conditional_components.append(
-                    build_condition_question(
+                    build_modified_condition_question(
                         name,
                         options,
+                        component["effect_value"].get().strip(),
+                        component["effect_mode"].get(),
                         wrap_values=wrap_conditional_values,
                     )
                 )
@@ -4018,6 +4382,12 @@ class MacroBuilderApp:
                 target_var.set(
                     "+".join(conditional_components + fixed_components)
                 )
+                if on_universal_flags is not None:
+                    on_universal_flags([
+                        component["universal"].get()
+                        for component in editor_components
+                        if component["type"] == "condition"
+                    ])
                 self.update_preview()
             win.destroy()
 
@@ -4027,24 +4397,44 @@ class MacroBuilderApp:
             command=insert,
         ).pack(pady=(6, 12))
 
+        def insert_pride_effect():
+            if target_var is not None:
+                target_var.set(ATTACK_PRIDE_EFFECT)
+                if on_universal_flags is not None:
+                    on_universal_flags([])
+                self.update_preview()
+            win.destroy()
+
     def insert_question(
         self,
         target_var=None,
         conditional=False,
         wrap_conditional_values=True,
         wrap_advanced_values=False,
+        allow_pride=False,
+        universal_flags=None,
+        on_universal_flags=None,
     ):
         if conditional:
             self.insert_condition_components(
                 target_var,
                 wrap_conditional_values,
                 wrap_advanced_values,
+                allow_pride=allow_pride,
+                universal_flags=universal_flags,
+                on_universal_flags=on_universal_flags,
             )
             return
 
         win = tk.Toplevel(self.root)
         win.title("Condição" if conditional else "Pergunta Roll20")
-        win.geometry("700x540" if conditional else "650x460")
+        set_responsive_window_geometry(
+            win,
+            700 if conditional else 650,
+            540 if conditional else 460,
+            500,
+            340,
+        )
         win.transient(self.root)
         win.grab_set()
 
@@ -4138,8 +4528,7 @@ class MacroBuilderApp:
             style="Section.TLabel"
         ).pack(anchor="w", padx=15, pady=(12, 4))
 
-        options_frame = ttk.Frame(win)
-        options_frame.pack(fill="both", expand=True, padx=15)
+        options_frame = self.create_scrollable_panel(win, padx=15)
 
         rows = []
 
@@ -4162,6 +4551,14 @@ class MacroBuilderApp:
             advanced_var = tk.BooleanVar(value=False)
             advanced_name_var = tk.StringVar(value="Segunda condição")
 
+            remove_button = ttk.Button(
+                row,
+                text="×",
+                width=2,
+                command=lambda: remove_row(row_data),
+            )
+            remove_button.pack(side="left", padx=(0, 4))
+
             ttk.Entry(
                 row,
                 textvariable=label_var,
@@ -4183,14 +4580,18 @@ class MacroBuilderApp:
 
             nested_frame = ttk.Frame(row_container)
             nested_options = []
-            add_button_holder = [None]
+
+            def remove_nested_option(nested_option):
+                nested_options.remove(nested_option)
+                nested_option["frame"].destroy()
 
             def add_nested_option():
-                if add_button_holder[0]:
-                    add_button_holder[0].destroy()
-
                 nested_row = ttk.Frame(nested_frame)
-                nested_row.pack(fill="x", pady=(2, 0))
+                nested_row.pack(
+                    fill="x",
+                    pady=(2, 0),
+                    before=nested_add_button,
+                )
 
                 option_number = len(nested_options) + 1
                 nested_label_var = tk.StringVar(
@@ -4199,6 +4600,17 @@ class MacroBuilderApp:
                 nested_value_var = tk.StringVar(
                     value=f"Valor {option_number}"
                 )
+                nested_option = {
+                    "frame": nested_row,
+                    "label": nested_label_var,
+                    "value": nested_value_var,
+                }
+                ttk.Button(
+                    nested_row,
+                    text="×",
+                    width=2,
+                    command=lambda: remove_nested_option(nested_option),
+                ).pack(side="left", padx=(0, 4))
                 ttk.Entry(
                     nested_row,
                     textvariable=nested_label_var,
@@ -4210,16 +4622,14 @@ class MacroBuilderApp:
                     width=15,
                 ).pack(side="left", padx=(5, 0))
 
-                add_button_holder[0] = ttk.Button(
-                    nested_row,
-                    text="+ Campo",
-                    command=add_nested_option,
-                )
-                add_button_holder[0].pack(side="left", padx=(5, 0))
-                nested_options.append(
-                    (nested_label_var, nested_value_var)
-                )
+                nested_options.append(nested_option)
 
+            nested_add_button = ttk.Button(
+                nested_frame,
+                text="+ Campo",
+                command=add_nested_option,
+            )
+            nested_add_button.pack(anchor="w", pady=(2, 0))
             add_nested_option()
 
             advanced_check = ttk.Checkbutton(
@@ -4263,6 +4673,7 @@ class MacroBuilderApp:
                 "advanced": advanced_var,
                 "advanced_name": advanced_name_var,
                 "nested_options": nested_options,
+                "container": row_container,
             }
             rows.append(row_data)
 
@@ -4271,16 +4682,20 @@ class MacroBuilderApp:
                 advanced_var.set(True)
                 advanced_name_var.set(advanced_name)
                 if not options:
-                    nested_options[0][0].set("")
-                    nested_options[0][1].set("")
+                    nested_options[0]["label"].set("")
+                    nested_options[0]["value"].set("")
                 for index, nested_option in enumerate(options):
                     if index:
                         add_nested_option()
-                    nested_options[index][0].set(nested_option.label)
-                    nested_options[index][1].set(nested_option.value)
+                    nested_options[index]["label"].set(nested_option.label)
+                    nested_options[index]["value"].set(nested_option.value)
                 toggle_advanced()
 
             return row_data
+
+        def remove_row(row_data):
+            rows.remove(row_data)
+            row_data["container"].destroy()
 
         if loaded_options is None:
             add_row("SIM", "1")
@@ -4316,12 +4731,11 @@ class MacroBuilderApp:
 
                         advanced_options = [
                             QuestionOption(
-                                nested_label.get().strip(),
-                                nested_value.get().strip(),
+                                nested_option["label"].get().strip(),
+                                nested_option["value"].get().strip(),
                             )
-                            for nested_label, nested_value
-                            in row["nested_options"]
-                            if nested_label.get().strip()
+                            for nested_option in row["nested_options"]
+                            if nested_option["label"].get().strip()
                         ]
                         value = build_advanced_question_value(
                             advanced_name,
@@ -4373,7 +4787,7 @@ class MacroBuilderApp:
     def insert_button(self):
         win = tk.Toplevel(self.root)
         win.title("Botão de macro")
-        win.geometry("500x240")
+        set_responsive_window_geometry(win, 500, 240, 380, 200)
         win.transient(self.root)
         win.grab_set()
 
@@ -4473,7 +4887,7 @@ class MacroBuilderApp:
     def insert_custom(self):
         win = tk.Toplevel(self.root)
         win.title("Importe sua Macro")
-        win.geometry("720x370")
+        set_responsive_window_geometry(win, 720, 370, 520, 280)
         win.transient(self.root)
         win.grab_set()
 
@@ -4554,7 +4968,7 @@ class MacroBuilderApp:
     def insert_description_text(self):
         win = tk.Toplevel(self.root)
         win.title("Texto da descrição")
-        win.geometry("500x260")
+        set_responsive_window_geometry(win, 500, 260, 380, 200)
         win.transient(self.root)
         win.grab_set()
 
@@ -4588,6 +5002,701 @@ class MacroBuilderApp:
     # ========================================================
     # Utilidades
     # ========================================================
+
+    def update_skill_macro_gear_style(self):
+        if self.skill_macro_button is not None:
+            self.skill_macro_button.configure(
+                text=(
+                    "⚒\nEspecialista"
+                    if self.skill_macro_specialist_enabled
+                    else "⚒ Perícias"
+                ),
+                style=(
+                    "Modified.TButton"
+                    if self.skill_macro_specialist_enabled
+                    else "TButton"
+                ),
+            )
+        if self.skill_macro_gear_button is not None:
+            self.skill_macro_gear_button.configure(
+                style=(
+                    "Modified.TButton"
+                    if (
+                        self.skill_macro_extra
+                        or self.skill_macro_specialist_enabled
+                    )
+                    else "TButton"
+                )
+            )
+
+    def update_resistance_macro_gear_style(self):
+        if self.resistance_macro_gear_button is not None:
+            self.resistance_macro_gear_button.configure(
+                style=(
+                    "Modified.TButton"
+                    if self.resistance_macro_extra
+                    else "TButton"
+                )
+            )
+
+    def build_skill_macro(self):
+        if self.skill_macro_specialist_enabled:
+            skills = [
+                skill
+                for skill in PERICIAS_ESPECIALISTA
+                if skill in self.skill_macro_specialist_skills
+            ]
+            skill_options = "".join(
+                (
+                    f"|{skill},{'Oficio' if skill == 'Ofício' else skill}"
+                    f"[[1d20+[[{PERICIAS_ESPECIALISTA[skill]}]]"
+                )
+                for skill in skills
+            )
+            skill_macro_base = (
+                "&{template:t20}{{character=@{character_name}}}"
+                "{{rollname=Teste de Perícia}}"
+                f"{{{{theroll=?{{Perícia: {skill_options}}}"
+                "+[[@{bonus_treino}]]"
+            )
+        else:
+            skill_macro_base = SKILL_MACRO_BASE
+
+        return (
+            skill_macro_base
+            + self.skill_macro_extra
+            + SKILL_MACRO_CLOSING
+        )
+
+    def build_resistance_macro(self):
+        return (
+            RESISTANCE_MACRO_BASE
+            + self.resistance_macro_extra
+            + SKILL_MACRO_CLOSING
+        )
+
+    def build_skill_question_extra(
+        self,
+        name,
+        options,
+        effect_value,
+        effect_mode,
+        effect_enabled,
+        pride_enabled,
+    ):
+        question = MacroQuestion(name, options).build()
+        if not options:
+            question = f"?{{{name}|}}"
+
+        if not options and not effect_value:
+            question = f"?{{{name}|0}}"
+
+        if not effect_enabled:
+            return "+[[(?{Orgulho|0}*2)]]" if pride_enabled else ""
+
+        if pride_enabled:
+            pride_macro = "(?{Orgulho|0}*2)"
+            if effect_mode == "multiplicativo" and effect_value:
+                effect = f"({question}*{effect_value})"
+            elif effect_value:
+                effect = f"{question[:-1]}{effect_value}}}"
+            else:
+                effect = question
+            return f"+[[{pride_macro}+{effect}]]"
+
+        if effect_mode == "multiplicativo" and effect_value:
+            return f"+[[({question}*{effect_value})]]"
+        if effect_value:
+            return f"+[[({question}{effect_value})]]"
+        return f"+[[({question})]]"
+
+    def copy_skill_macro(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.build_skill_macro())
+        self.root.update()
+        messagebox.showinfo(
+            "Macro de Perícias copiada",
+            "A macro de Perícias foi copiada para a área de transferência.",
+        )
+
+    def copy_resistance_macro(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.build_resistance_macro())
+        self.root.update()
+        messagebox.showinfo(
+            "Macro de Resistências copiada",
+            "A macro de Resistências foi copiada para a área de transferência.",
+        )
+
+    def open_skill_macro_editor(self, macro_type="skill"):
+        is_skill_macro = macro_type == "skill"
+        state_prefix = (
+            "skill_macro" if is_skill_macro else "resistance_macro"
+        )
+        section_name = "Perícias" if is_skill_macro else "Resistências"
+        get_setting = lambda name: getattr(
+            self,
+            f"{state_prefix}_{name}",
+        )
+        set_setting = lambda name, value: setattr(
+            self,
+            f"{state_prefix}_{name}",
+            value,
+        )
+        win = tk.Toplevel(self.root)
+        win.title(f"Pergunta Roll20 - {section_name}")
+        set_responsive_window_geometry(
+            win,
+            760,
+            700 if is_skill_macro else 560,
+            560,
+            420,
+        )
+        win.transient(self.root)
+        win.grab_set()
+
+        editor_viewport = ttk.Frame(win)
+        editor_viewport.pack(fill="both", expand=True)
+        editor_canvas = tk.Canvas(editor_viewport, highlightthickness=0)
+        editor_scrollbar = ttk.Scrollbar(
+            editor_viewport,
+            orient="vertical",
+            command=editor_canvas.yview,
+        )
+        editor_canvas.configure(yscrollcommand=editor_scrollbar.set)
+        editor_viewport.columnconfigure(0, weight=1)
+        editor_viewport.columnconfigure(1, minsize=16)
+        editor_viewport.rowconfigure(0, weight=1)
+        editor_canvas.grid(row=0, column=0, sticky="nsew")
+        editor_scrollbar.grid(row=0, column=1, sticky="ns")
+        editor_content = ttk.Frame(editor_canvas)
+        editor_content_window = editor_canvas.create_window(
+            (0, 0),
+            window=editor_content,
+            anchor="nw",
+        )
+
+        def update_editor_scroll_region(_event=None):
+            bounds = editor_canvas.bbox("all")
+            content_height = bounds[3] if bounds else 0
+            editor_canvas.configure(
+                scrollregion=(
+                    0,
+                    0,
+                    max(editor_canvas.winfo_width(), bounds[2] if bounds else 0),
+                    content_height,
+                )
+            )
+            needs_scrollbar = (
+                content_height > editor_canvas.winfo_height() + 1
+            )
+            if needs_scrollbar:
+                editor_scrollbar.state(["!disabled"])
+            else:
+                editor_scrollbar.state(["disabled"])
+                editor_canvas.yview_moveto(0)
+
+        editor_content.bind(
+            "<Configure>",
+            update_editor_scroll_region,
+        )
+        editor_canvas.bind(
+            "<Configure>",
+            lambda event: (
+                editor_canvas.itemconfigure(
+                    editor_content_window,
+                    width=event.width,
+                ),
+                editor_canvas.after_idle(update_editor_scroll_region),
+            ),
+        )
+
+        ttk.Label(
+            editor_content,
+            text="Nome da pergunta:",
+            style="Section.TLabel",
+        ).pack(anchor="w", padx=15, pady=(15, 4))
+
+        name_var = tk.StringVar(value=get_setting("question_name"))
+        ttk.Entry(
+            editor_content,
+            textvariable=name_var,
+        ).pack(fill="x", padx=15)
+
+        ttk.Label(
+            editor_content,
+            text="Opções (nome = valor):",
+            style="Section.TLabel",
+        ).pack(anchor="w", padx=15, pady=(12, 4))
+
+        options_frame = self.create_scrollable_panel(
+            editor_content,
+            padx=15,
+        )
+        options_canvas = options_frame.master
+        options_frame_container = options_canvas.master
+        options_frame_container.pack_configure(
+            fill="x",
+            expand=False,
+        )
+        options_canvas.configure(height=1)
+        options_scrollbar = next(
+            child
+            for child in options_frame_container.winfo_children()
+            if isinstance(child, ttk.Scrollbar)
+        )
+        option_rows = []
+
+        def resize_options_list(_event=None):
+            options_frame.update_idletasks()
+            content_height = options_frame.winfo_reqheight()
+            max_visible_height = 5 * 34
+            visible_height = min(content_height, max_visible_height)
+            options_canvas.configure(height=max(1, visible_height))
+            options_canvas.configure(
+                scrollregion=options_canvas.bbox("all")
+            )
+            if content_height > visible_height + 1:
+                options_scrollbar.state(["!disabled"])
+            else:
+                options_scrollbar.state(["disabled"])
+                options_canvas.yview_moveto(0)
+            editor_canvas.after_idle(update_editor_scroll_region)
+
+        options_frame.bind("<Configure>", resize_options_list)
+
+        def remove_option(option_row):
+            option_rows.remove(option_row)
+            option_row["frame"].destroy()
+            resize_options_list()
+
+        def add_option(label="", value=""):
+            row_frame = ttk.Frame(options_frame)
+            row_frame.pack(fill="x", pady=2)
+            option_row = {
+                "frame": row_frame,
+                "label": tk.StringVar(value=label),
+                "value": tk.StringVar(value=value),
+            }
+            ttk.Button(
+                row_frame,
+                text="×",
+                width=2,
+                command=lambda: remove_option(option_row),
+            ).pack(side="left", padx=(0, 4))
+            ttk.Entry(
+                row_frame,
+                textvariable=option_row["label"],
+                width=22,
+            ).pack(side="left", fill="x", expand=True)
+            ttk.Entry(
+                row_frame,
+                textvariable=option_row["value"],
+                width=22,
+            ).pack(side="left", padx=(5, 0), fill="x", expand=True)
+            option_rows.append(option_row)
+            resize_options_list()
+
+        for label, value in get_setting("question_options"):
+            add_option(label, value)
+
+        editor_actions = ttk.Frame(win)
+        editor_actions.pack(
+            side="bottom",
+            fill="x",
+            padx=15,
+            pady=(5, 10),
+        )
+        ttk.Button(
+            editor_actions,
+            text="Cancelar",
+            command=win.destroy,
+            style="EditorCancel.TButton",
+        ).pack(side="right")
+        ttk.Button(
+            editor_actions,
+            text="Salvar",
+            command=lambda: save(),
+            style="EditorSave.TButton",
+        ).pack(side="right", padx=(0, 6))
+
+        def resize_editor_to_content():
+            if not win.winfo_exists():
+                return
+            win.update_idletasks()
+            bounds = editor_canvas.bbox("all")
+            content_height = bounds[3] if bounds else 0
+            requested_height = (
+                content_height
+                + editor_actions.winfo_reqheight()
+                + 24
+            )
+            available_height = max(240, win.winfo_screenheight() - 80)
+            set_responsive_window_geometry(
+                win,
+                760,
+                min(available_height, max(420, requested_height)),
+                560,
+                420,
+            )
+
+        options_container = ttk.LabelFrame(
+            editor_content,
+            text="Opções",
+            padding=8,
+        )
+        options_container.pack(fill="x", padx=15, pady=(8, 0))
+
+        effect_frame = ttk.LabelFrame(
+            options_container,
+            text="Condicional com alterador de resultado",
+            padding=8,
+        )
+        effect_frame.pack(fill="x")
+
+        effect_value_var = tk.StringVar(
+            value=get_setting("effect_value")
+        )
+        ttk.Entry(
+            effect_frame,
+            textvariable=effect_value_var,
+            width=12,
+        ).pack(side="left", padx=(0, 10))
+        self.add_result_modifier_warning(effect_frame, effect_value_var)
+
+        effect_mode_var = tk.StringVar(
+            value=get_setting("effect_mode")
+        )
+        ttk.Radiobutton(
+            effect_frame,
+            text="Multiplicativo",
+            variable=effect_mode_var,
+            value="multiplicativo",
+        ).pack(side="left", padx=(0, 8))
+        ttk.Radiobutton(
+            effect_frame,
+            text="Aditivo",
+            variable=effect_mode_var,
+            value="aditivo",
+        ).pack(side="left")
+
+        ttk.Button(
+            effect_frame,
+            text="+ Adicionar opções",
+            command=add_option,
+        ).pack(side="right")
+
+        macro_effect_controls = ttk.Frame(options_container)
+        macro_effect_controls.pack(fill="x", pady=(8, 0))
+        pride_frame = ttk.Frame(macro_effect_controls)
+        pride_frame.pack(side="left")
+        effect_control_frame = ttk.Frame(macro_effect_controls)
+        effect_control_frame.pack(side="left", padx=(8, 0))
+        effect_active_var = tk.BooleanVar(
+            value=get_setting("effect_enabled")
+        )
+
+        def render_effect_control():
+            for child in effect_control_frame.winfo_children():
+                child.destroy()
+            if effect_active_var.get():
+                ttk.Button(
+                    effect_control_frame,
+                    text="EFEITO DE PERGUNTA (ativo)",
+                    command=lambda: set_effect_active(False),
+                    style="EffectActive.TButton",
+                    padding=(6, 4),
+                ).pack(side="left")
+            else:
+                ttk.Button(
+                    effect_control_frame,
+                    text="EFEITO DE PERGUNTA",
+                    command=lambda: set_effect_active(True),
+                    style="EffectInactive.TButton",
+                    padding=(6, 4),
+                ).pack(side="left")
+
+        def set_effect_active(active):
+            effect_active_var.set(active)
+            render_effect_control()
+
+        render_effect_control()
+
+        pride_active_var = tk.BooleanVar(
+            value=get_setting("pride_enabled")
+        )
+
+        def render_pride_control():
+            for child in pride_frame.winfo_children():
+                child.destroy()
+            if pride_active_var.get():
+                ttk.Button(
+                    pride_frame,
+                    text="👑 ORGULHO (ativo)",
+                    command=lambda: set_pride_active(False),
+                    style="PrideActive.TButton",
+                    padding=(6, 4),
+                ).pack(side="left")
+            else:
+                ttk.Button(
+                    pride_frame,
+                    text="👑 ORGULHO",
+                    command=lambda: set_pride_active(True),
+                    style="PrideInactive.TButton",
+                    padding=(6, 4),
+                ).pack(side="left")
+
+        def set_pride_active(active):
+            pride_active_var.set(active)
+            render_pride_control()
+
+        render_pride_control()
+
+        specialist_control_frame = ttk.Frame(macro_effect_controls)
+        if is_skill_macro:
+            specialist_control_frame.pack(
+                side="left",
+                padx=(8, 0),
+            )
+        specialist_active_var = tk.BooleanVar(
+            value=(
+                get_setting("specialist_enabled")
+                if is_skill_macro
+                else False
+            )
+        )
+        specialist_options_frame = ttk.LabelFrame(
+            options_container,
+            text="Configuração do Especialista",
+            padding=8,
+        )
+        intelligence_var = tk.StringVar(
+            value=(
+                get_setting("specialist_intelligence")
+                if is_skill_macro
+                else "1"
+            )
+        )
+        skill_vars = {
+            skill: tk.BooleanVar(
+                value=(
+                    is_skill_macro
+                    and skill in get_setting("specialist_skills")
+                )
+            )
+            for skill in PERICIAS_ESPECIALISTA
+        }
+        skill_buttons = {}
+
+        ttk.Label(
+            specialist_options_frame,
+            text="Inteligência do personagem (mínimo de seleções):",
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Entry(
+            specialist_options_frame,
+            textvariable=intelligence_var,
+            width=8,
+        ).grid(row=0, column=3, sticky="w", padx=(6, 0))
+        specialist_skills_panel = ttk.Frame(specialist_options_frame)
+        specialist_skills_panel.grid(
+            row=1,
+            column=0,
+            columnspan=4,
+            sticky="nsew",
+            pady=(6, 0),
+        )
+        specialist_skills_frame = self.create_scrollable_panel(
+            specialist_skills_panel,
+            canvas_height=220,
+        )
+
+        def get_specialist_skill_limit():
+            try:
+                return max(1, int(intelligence_var.get().strip()))
+            except ValueError:
+                return 1
+
+        def refresh_specialist_skill_buttons(*_args):
+            selected_count = sum(
+                variable.get() for variable in skill_vars.values()
+            )
+            selection_limit = get_specialist_skill_limit()
+            for skill, button in skill_buttons.items():
+                selected = skill_vars[skill].get()
+                if selected:
+                    button.configure(
+                        state="normal",
+                        style="SpecialistSelected.TButton",
+                    )
+                elif selected_count >= selection_limit:
+                    button.configure(
+                        state="disabled",
+                        style="SpecialistDisabled.TButton",
+                    )
+                else:
+                    button.configure(
+                        state="normal",
+                        style="TButton",
+                    )
+
+        def toggle_specialist_skill(skill):
+            variable = skill_vars[skill]
+            if (
+                not variable.get()
+                and sum(item.get() for item in skill_vars.values())
+                >= get_specialist_skill_limit()
+            ):
+                return
+            variable.set(not variable.get())
+            refresh_specialist_skill_buttons()
+
+        for skill in skill_vars:
+            button = ttk.Button(
+                specialist_skills_frame,
+                text=skill,
+                command=lambda selected_skill=skill: toggle_specialist_skill(
+                    selected_skill
+                ),
+            )
+            skill_buttons[skill] = button
+
+        self.make_responsive_grid(
+            specialist_skills_frame,
+            list(skill_buttons.values()),
+            minimum_cell_width=125,
+            maximum_columns=4,
+        )
+        specialist_options_frame.columnconfigure(0, weight=1)
+        specialist_options_frame.columnconfigure(3, weight=1)
+        intelligence_var.trace_add(
+            "write",
+            refresh_specialist_skill_buttons,
+        )
+        refresh_specialist_skill_buttons()
+
+        def render_specialist_control():
+            for child in specialist_control_frame.winfo_children():
+                child.destroy()
+            if specialist_active_var.get():
+                ttk.Button(
+                    specialist_control_frame,
+                    text="ESPECIALISTA (ativo)",
+                    command=lambda: set_specialist_active(False),
+                    style="EffectActive.TButton",
+                    padding=(6, 4),
+                ).pack(side="left")
+                specialist_options_frame.pack(
+                    fill="x",
+                    pady=(6, 0),
+                )
+                win.after_idle(resize_editor_to_content)
+            else:
+                ttk.Button(
+                    specialist_control_frame,
+                    text="ESPECIALISTA",
+                    command=lambda: set_specialist_active(True),
+                    style="EffectInactive.TButton",
+                    padding=(6, 4),
+                ).pack(side="left")
+                specialist_options_frame.pack_forget()
+                win.after_idle(resize_editor_to_content)
+
+        def set_specialist_active(active):
+            specialist_active_var.set(active)
+            if is_skill_macro:
+                render_specialist_control()
+            else:
+                win.after_idle(resize_editor_to_content)
+
+        if is_skill_macro:
+            render_specialist_control()
+
+        def save():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning(
+                    f"Pergunta de {section_name}",
+                    "Digite um nome para a pergunta.",
+                    parent=win,
+                )
+                return
+
+            options = [
+                QuestionOption(
+                    row["label"].get().strip(),
+                    row["value"].get().strip(),
+                )
+                for row in option_rows
+                if row["label"].get().strip()
+            ]
+            specialist_skills = [
+                skill
+                for skill, variable in skill_vars.items()
+                if variable.get()
+            ]
+            specialist_intelligence = intelligence_var.get().strip()
+            if is_skill_macro and specialist_active_var.get():
+                try:
+                    intelligence_score = int(specialist_intelligence)
+                except ValueError:
+                    messagebox.showwarning(
+                        "Especialista",
+                        "Informe a Inteligência do personagem como um número inteiro.",
+                        parent=win,
+                    )
+                    return
+                minimum_skills = max(1, intelligence_score)
+                if minimum_skills > len(PERICIAS_ESPECIALISTA):
+                    messagebox.showwarning(
+                        "Especialista",
+                        (
+                            f"A Inteligência exige pelo menos {minimum_skills} "
+                            "seleções, mas existem apenas "
+                            f"{len(PERICIAS_ESPECIALISTA)}."
+                        ),
+                        parent=win,
+                    )
+                    return
+                if len(specialist_skills) < minimum_skills:
+                    messagebox.showwarning(
+                        "Especialista",
+                        (
+                            f"Selecione pelo menos {minimum_skills} opção(ões), "
+                            "de acordo com a Inteligência informada."
+                        ),
+                        parent=win,
+                    )
+                    return
+
+            set_setting("question_name", name)
+            set_setting("question_options", [
+                (option.label, option.value)
+                for option in options
+            ])
+            set_setting("pride_enabled", pride_active_var.get())
+            set_setting("effect_enabled", effect_active_var.get())
+            set_setting("effect_value", effect_value_var.get())
+            set_setting("effect_mode", effect_mode_var.get())
+            if is_skill_macro:
+                set_setting("specialist_enabled", specialist_active_var.get())
+                set_setting("specialist_skills", specialist_skills)
+                set_setting(
+                    "specialist_intelligence",
+                    specialist_intelligence,
+                )
+            set_setting("extra", self.build_skill_question_extra(
+                name,
+                options,
+                effect_value_var.get(),
+                effect_mode_var.get(),
+                effect_active_var.get(),
+                pride_active_var.get(),
+            ))
+            if is_skill_macro:
+                self.update_skill_macro_gear_style()
+            else:
+                self.update_resistance_macro_gear_style()
+            win.destroy()
 
     def copy_macro(self):
         macro = self.build_macro()
