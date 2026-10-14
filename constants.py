@@ -1,7 +1,7 @@
 import re
 
 
-VERSAO = "0.01.8.0"  # 0-Versão oficial. 01-Versão funcional. 8-Teste. 0-Correção.
+VERSAO = "0.01.9.0"  # 0-Versão oficial. 01-Versão funcional. 9-Teste. 0-Correção.
 RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
 
 BEST_DIE_FORMULA = "?{melhor dado|Não,1d20|Sim,2d20kh1}"

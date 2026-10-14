@@ -1,24 +1,10 @@
-import hashlib
 from html import unescape
-import json
-import os
-import queue
-import re
-import shutil
-import subprocess
-import sys
-import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
-from dataclasses import dataclass, field
-from typing import List
-from urllib.request import Request, urlopen
 
 from constants import (
-    ADVANCED_QUESTION_ESCAPES,
     ATTACK_PRIDE_EFFECT,
     BEST_DIE_FORMULA,
-    RELEASE_API_URL,
     RESISTANCE_MACRO_BASE,
     SKILL_MACRO_BASE,
     SKILL_MACRO_CLOSING,
@@ -27,1729 +13,45 @@ from constants import (
 from libraries import (
     ATTRIBUTES,
     COMMON_WEAPONS,
-    DAMAGE_SPECIAL_TRACK_BY_DIE,
     DAMAGE_STEP_TRACKS,
     DADOSCOMUNS,
     DADOSEXOTICOS,
-    DADOSPADRAO,
-    GLOBALMODIFIERS,
     PERICIAS_ESPECIALISTA,
-    PERICIASATACK,
 )
-from preview import (
-    PreviewMixin,
-    format_roll_preview,
-    get_preview_question_choices,
+from ui_theme import configure_theme, update_canvas_scroll_region
+
+from preview import PreviewMixin, format_roll_preview, get_preview_question_choices
+
+from auto_update import update_frozen_app
+from ui_theme import set_responsive_window_geometry
+
+from macro_core import (
+    get_damage_step_options,
+    get_damage_step_delta,
+    get_damage_step_track,
+    build_attack_expression,
+    build_critical_damage,
+    join_formula_parts,
+    simplify_condition_questions,
+    build_damage_roll_formula,
+    build_damage_expression,
+    build_critical_expression,
+    QuestionOption,
+    MacroQuestion,
+    build_condition_question,
+    build_modified_condition_question,
+    parse_result_modified_condition,
+    build_advanced_question_value,
+    looks_like_roll20_condition,
+    close_advanced_questions_before_outer_pipe,
+    parse_roll20_question,
+    extract_roll20_question_names,
+    split_roll20_components,
+    render_generated_macro,
+    parse_generated_macro_state,
+    MacroButton,
 )
 
-# ============================================================
-# Auto-Updater
-# ============================================================
-# O programa continua sendo distribuído como um único .exe.
-#
-# Durante uma atualização:
-#   1. O executável consulta a release do GitHub.
-#   2. A nova versão é baixada para LOCALAPPDATA.
-#   3. O updater auxiliar, incorporado ao .exe, é extraído
-#      para LOCALAPPDATA\MacroGenerator.
-#   4. O programa encerra.
-#   5. O updater espera o processo terminar e substitui o .exe.
-#   6. A nova versão é iniciada.
-#
-# Estou tentando retirar o PowerShell da jogada para tentar evitar que o Windows Defender bloqueie a atualização.
-# ============================================================
-
-
-def parse_version(version: str) -> tuple[int, ...] | None:
-    if not re.fullmatch(r"\d+(?:\.\d+)+", version):
-        return None
-    return tuple(int(part) for part in version.split("."))
-
-
-def get_update_directory() -> str:
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        local_app_data = os.path.expanduser("~")
-
-    directory = os.path.join(local_app_data, "MacroGenerator")
-    os.makedirs(directory, exist_ok=True)
-    return directory
-
-
-def set_responsive_window_geometry(
-    window,
-    width,
-    height,
-    minimum_width=360,
-    minimum_height=240,
-):
-    screen_width = window.winfo_screenwidth()
-    screen_height = window.winfo_screenheight()
-    available_width = max(320, screen_width - 40)
-    available_height = max(240, screen_height - 80)
-    width = min(width, available_width)
-    height = min(height, available_height)
-    window.geometry(f"{width}x{height}")
-    window.minsize(
-        min(minimum_width, width, available_width),
-        min(minimum_height, height, available_height),
-    )
-    window.maxsize(available_width, available_height)
-
-
-def get_bundled_updater() -> str | None:
-    if not getattr(sys, "frozen", False):
-        return None
-
-    meipass = getattr(sys, "_MEIPASS", None)
-    if not meipass:
-        return None
-
-    updater = os.path.join(meipass, "updater.exe")
-    return updater if os.path.isfile(updater) else None
-
-
-def update_frozen_app() -> bool:
-    if not getattr(sys, "frozen", False) or sys.platform != "win32":
-        return False
-
-    events = queue.Queue()
-    executable_path = os.path.abspath(sys.executable)
-    executable_folder = os.path.dirname(executable_path)
-    update_directory = get_update_directory()
-
-    downloaded_file = None
-    install_requested = False
-
-    def check_for_update():
-        try:
-            request = Request(
-                RELEASE_API_URL,
-                headers={"User-Agent": "MacroGenerator-Updater"},
-            )
-
-            with urlopen(request, timeout=10) as response:
-                release = json.load(response)
-
-            current_version = parse_version(VERSAO)
-
-            asset = next(
-                (
-                    item
-                    for item in release.get("assets", [])
-                    if re.search(
-                        r"\.V(\d+(?:\.\d+)+)\.exe$",
-                        item.get("name", ""),
-                        re.IGNORECASE,
-                    )
-                ),
-                None,
-            )
-
-            if not current_version or not asset:
-                events.put(
-                    (
-                        "finished",
-                        ("error", "Não foi possível ler a versão da release."),
-                    )
-                )
-                return
-
-            version_match = re.search(
-                r"\.V(\d+(?:\.\d+)+)\.exe$",
-                asset["name"],
-                re.IGNORECASE,
-            )
-
-            latest_version = (
-                parse_version(version_match.group(1))
-                if version_match
-                else None
-            )
-
-            if not latest_version or latest_version <= current_version:
-                events.put(("finished", "current"))
-                return
-
-            events.put(
-                ("available", asset, version_match.group(1))
-            )
-
-        except (
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            json.JSONDecodeError,
-        ) as error:
-            events.put(("finished", ("error", str(error))))
-
-    def download_update(asset):
-        temporary_path = None
-
-        try:
-            # O download fica fora da pasta do executável.
-            final_path = os.path.join(
-                update_directory,
-                asset["name"],
-            )
-            temporary_path = final_path + ".download"
-
-            if os.path.exists(temporary_path):
-                os.remove(temporary_path)
-
-            events.put(
-                (
-                    "download",
-                    asset.get("size", 0),
-                    asset["name"],
-                )
-            )
-
-            digest = hashlib.sha256()
-            downloaded = 0
-
-            request = Request(
-                asset["browser_download_url"],
-                headers={"User-Agent": "MacroGenerator-Updater"},
-            )
-
-            with (
-                urlopen(request, timeout=60) as response,
-                open(temporary_path, "wb") as output,
-            ):
-                while chunk := response.read(256 * 1024):
-                    output.write(chunk)
-                    digest.update(chunk)
-                    downloaded += len(chunk)
-                    events.put(("progress", downloaded))
-
-            expected_digest = asset.get("digest", "")
-
-            if expected_digest.startswith("sha256:"):
-                expected_hash = expected_digest.removeprefix(
-                    "sha256:"
-                ).lower()
-
-                if digest.hexdigest().lower() != expected_hash:
-                    raise ValueError(
-                        "A verificação do arquivo baixado falhou."
-                    )
-
-            elif downloaded != asset.get("size", downloaded):
-                raise ValueError(
-                    "O download do arquivo ficou incompleto."
-                )
-
-            events.put(
-                (
-                    "finished",
-                    ("update", temporary_path),
-                )
-            )
-
-            temporary_path = None
-
-        except (
-            OSError,
-            ValueError,
-            KeyError,
-            TypeError,
-            json.JSONDecodeError,
-        ) as error:
-            events.put(("finished", ("error", str(error))))
-
-        finally:
-            if temporary_path and os.path.exists(temporary_path):
-                try:
-                    os.remove(temporary_path)
-                except OSError:
-                    pass
-
-    window = tk.Tk()
-    window.title("Macro Generator - Atualizador")
-    set_responsive_window_geometry(window, 410, 155, 320, 130)
-    window.resizable(False, False)
-    window.attributes("-topmost", True)
-
-    status_label = ttk.Label(
-        window,
-        text="Iniciando verificação...",
-        anchor="center",
-    )
-    status_label.pack(
-        fill="x",
-        padx=18,
-        pady=(18, 10),
-    )
-
-    progress_bar = ttk.Progressbar(
-        window,
-        mode="indeterminate",
-        maximum=100,
-    )
-    progress_bar.pack(
-        fill="x",
-        padx=18,
-        pady=(0, 10),
-    )
-    progress_bar.start(12)
-
-    button_frame = ttk.Frame(window)
-    button_frame.pack(
-        fill="x",
-        padx=18,
-        pady=(0, 14),
-    )
-
-    def close_updater(install=False):
-        nonlocal install_requested
-        install_requested = install
-        window.destroy()
-
-    install_button = ttk.Button(
-        button_frame,
-        text="Instalar e reiniciar",
-        command=lambda: close_updater(install=True),
-    )
-
-    later_button = ttk.Button(
-        button_frame,
-        text="Agora não",
-        command=close_updater,
-    )
-
-    def begin_download(asset):
-        status_label.configure(
-            text=f"Baixando {asset['name']}..."
-        )
-
-        progress_bar.stop()
-        progress_bar.configure(
-            mode="determinate",
-            maximum=max(asset.get("size", 0), 1),
-            value=0,
-        )
-
-        threading.Thread(
-            target=download_update,
-            args=(asset,),
-            daemon=True,
-        ).start()
-
-    def center_window():
-        window.update_idletasks()
-
-        x = (
-            window.winfo_screenwidth()
-            - window.winfo_width()
-        ) // 2
-
-        y = (
-            window.winfo_screenheight()
-            - window.winfo_height()
-        ) // 2
-
-        window.geometry(f"+{x}+{y}")
-
-    def check_events():
-        nonlocal downloaded_file
-
-        try:
-            while True:
-                event = events.get_nowait()
-
-                if event[0] == "available":
-                    _, asset, latest_version = event
-
-                    progress_bar.stop()
-                    progress_bar.configure(
-                        mode="determinate",
-                        value=0,
-                    )
-
-                    should_download = messagebox.askyesno(
-                        "Atualização disponível",
-                        (
-                            f"A versão {latest_version} está disponível.\n\n"
-                            "Deseja baixar agora?"
-                        ),
-                        parent=window,
-                    )
-
-                    if should_download:
-                        begin_download(asset)
-                    else:
-                        status_label.configure(
-                            text=(
-                                "Download cancelado. "
-                                "Abrindo a versão atual..."
-                            )
-                        )
-
-                        window.after(
-                            500,
-                            window.destroy,
-                        )
-                        return
-
-                elif event[0] == "download":
-                    _, total_size, file_name = event
-
-                    status_label.configure(
-                        text=f"Baixando {file_name}"
-                    )
-
-                    progress_bar.stop()
-                    progress_bar.configure(
-                        mode="determinate",
-                        maximum=max(total_size, 1),
-                        value=0,
-                    )
-
-                elif event[0] == "progress":
-                    progress_bar.configure(
-                        value=event[1]
-                    )
-
-                elif event[0] == "finished":
-                    result = event[1]
-
-                    if (
-                        isinstance(result, tuple)
-                        and result[0] == "update"
-                    ):
-                        # Guardamos somente o arquivo baixado.
-                        # O destino final será decidido pelo updater.
-                        downloaded_file = result[1]
-
-                        status_label.configure(
-                            text=(
-                                "Download concluído. "
-                                "Instalar e reiniciar o programa?"
-                            )
-                        )
-
-                        progress_bar.configure(
-                            value=progress_bar.cget("maximum")
-                        )
-
-                        install_button.pack(
-                            side="left",
-                            expand=True,
-                            padx=(0, 6),
-                        )
-
-                        later_button.pack(
-                            side="left",
-                            expand=True,
-                            padx=(6, 0),
-                        )
-
-                        return
-
-                    if result == "current":
-                        status_label.configure(
-                            text=(
-                                "Versão atualizada. "
-                                "Abrindo programa..."
-                            )
-                        )
-                    else:
-                        status_label.configure(
-                            text=(
-                                "Falha ao atualizar. "
-                                "Abrindo a versão atual..."
-                            )
-                        )
-
-                    window.after(
-                        500,
-                        window.destroy,
-                    )
-                    return
-
-        except queue.Empty:
-            pass
-
-        window.after(
-            100,
-            check_events,
-        )
-
-    center_window()
-
-    window.protocol(
-        "WM_DELETE_WINDOW",
-        close_updater,
-    )
-
-    status_label.configure(
-        text="Verificando versão..."
-    )
-
-    threading.Thread(
-        target=check_for_update,
-        daemon=True,
-    ).start()
-
-    window.after(
-        100,
-        check_events,
-    )
-
-    window.mainloop()
-
-    if not downloaded_file or not install_requested:
-        if downloaded_file:
-            try:
-                os.remove(downloaded_file)
-            except OSError:
-                pass
-
-        return False
-
-    updater_source = get_bundled_updater()
-
-    if not updater_source:
-        try:
-            os.remove(downloaded_file)
-        except OSError:
-            pass
-
-        messagebox.showerror(
-            "Atualização",
-            (
-                "O componente de atualização não está "
-                "presente nesta versão do programa."
-            ),
-        )
-        return False
-
-    updater_path = os.path.join(
-        update_directory,
-        "updater.exe",
-    )
-
-    updater_staging = updater_path + ".new"
-
-    try:
-        # Copia o updater incorporado para LOCALAPPDATA.
-        # Ele permanece lá para as próximas atualizações.
-        shutil.copy2(
-            updater_source,
-            updater_staging,
-        )
-
-        os.replace(
-            updater_staging,
-            updater_path,
-        )
-
-        subprocess.Popen(
-            [
-                updater_path,
-                executable_path,
-                downloaded_file,
-                str(os.getpid()),
-            ],
-            cwd=update_directory,
-            close_fds=True,
-        )
-
-        return True
-
-    except OSError as error:
-        for path in (
-            downloaded_file,
-            updater_staging,
-        ):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-        messagebox.showerror(
-            "Atualização",
-            f"Não foi possível iniciar a atualização:\n\n{error}",
-        )
-
-        return False
-
-
-
-# ============================================================
-# Roll20 Macro Builder
-# ============================================================
-# Gerador simples e extensível de macros de ataque para Roll20.
-#
-# A ideia é permitir montar macros sem precisar digitar
-# manualmente os comandos mais comuns, e auxiliar nos mais complexos.
-# ============================================================
-
-
-def get_damage_step_options() -> list[tuple[str, str]]:
-    options = []
-    seen_values = set()
-
-    for dice_group in DADOSPADRAO.values():
-        for label, value in dice_group.items():
-            if value not in seen_values:
-                options.append((label, value))
-                seen_values.add(value)
-
-    for steps in DAMAGE_STEP_TRACKS.values():
-        for value in steps:
-            if value not in seen_values:
-                options.append((value, value))
-                seen_values.add(value)
-
-    return sorted(options, key=lambda option: get_damage_die_max_total(option[1]))
-
-
-def get_damage_die_max_total(die: str) -> int:
-    match = re.fullmatch(r"(\d*)d(\d+)", die, flags=re.IGNORECASE)
-    if not match:
-        return 0
-    count = int(match.group(1) or "1")
-    sides = int(match.group(2))
-    return count * sides
-
-
-def get_damage_step_delta(start: str, current: str, steps: tuple[str, ...]) -> tuple[int, int]:
-    step_delta = steps.index(current) - steps.index(start)
-    total_delta = get_damage_die_max_total(current) - get_damage_die_max_total(start)
-    return step_delta, total_delta
-
-
-def get_damage_step_track(die: str) -> tuple[str, tuple[str, ...]]:
-    track_name = DAMAGE_SPECIAL_TRACK_BY_DIE.get(die, "Padrão")
-    return track_name, DAMAGE_STEP_TRACKS[track_name]
-
-
-def build_attack_expression(
-    base_formula: str,
-    threat_margin: str = "",
-    skill: str = "",
-    extra_values: list[str] | None = None,
-) -> str:
-    attack = (base_formula or "").strip()
-    margin = (threat_margin or "").strip()
-    if attack and margin.isdigit():
-        attack += f"cs>{margin}"
-    if skill in PERICIASATACK:
-        attack += "+" + PERICIASATACK[skill]
-    for value in (extra_values or []):
-        if value:
-            attack += "+" + value
-    if attack:
-        attack += "+" + GLOBALMODIFIERS["Concatenaçao de ataque"]
-    return attack
-
-
-def build_critical_damage(base_formula: str, repeats: int = 1) -> str:
-    formula = (base_formula or "").strip()
-    if not formula:
-        return ""
-
-    try:
-        repeats = int(repeats)
-    except (TypeError, ValueError):
-        repeats = 1
-
-    if repeats <= 1:
-        return formula
-
-    return join_formula_parts(*([formula] * repeats))
-
-
-def join_formula_parts(*parts: str) -> str:
-    formula = ""
-    for part in parts:
-        value = (part or "").strip()
-        if not value:
-            continue
-        if not formula or value.startswith("-"):
-            formula += value
-        else:
-            formula += "+" + value
-    return formula
-
-
-def simplify_condition_questions(formula: str) -> str:
-    parts = []
-    cursor = 0
-
-    while True:
-        start = formula.find("?{", cursor)
-        if start == -1:
-            parts.append(formula[cursor:])
-            break
-
-        parts.append(formula[cursor:start])
-        depth = 1
-        pipe = -1
-        end = start + 2
-        while end < len(formula) and depth:
-            if formula.startswith("&#124;", end):
-                if depth == 1 and pipe == -1:
-                    pipe = end
-                end += len("&#124;")
-            elif formula.startswith("&#125;", end):
-                depth -= 1
-                end += len("&#125;")
-            elif formula[end] == "|" and depth == 1 and pipe == -1:
-                pipe = end
-                end += 1
-            elif formula[end] == "{":
-                depth += 1
-                end += 1
-            elif formula[end] == "}":
-                depth -= 1
-                end += 1
-            else:
-                end += 1
-
-        if depth:
-            parts.append(formula[start:])
-            break
-
-        if pipe == -1:
-            parts.append(formula[start:end])
-        else:
-            parts.append(f"?{{{formula[start + 2:pipe]}}}")
-        cursor = end
-
-    return "".join(parts)
-
-
-def build_damage_roll_formula(
-    base_formula: str,
-    attributes: list[str] | None = None,
-    universal_conditions: list[str] | None = None,
-) -> str:
-    formula = join_formula_parts(base_formula, *(attributes or []))
-    universal_conditions = [
-        condition
-        for condition in (universal_conditions or [])
-        if condition
-    ]
-    if formula or universal_conditions:
-        damage_suffix = GLOBALMODIFIERS["Concatenaçao de Dano"]
-        roll_bonus = GLOBALMODIFIERS["Bonus Rolagem"]
-        if universal_conditions and roll_bonus in damage_suffix:
-            roll_bonus_index = damage_suffix.rfind(roll_bonus)
-            before_roll_bonus = damage_suffix[:roll_bonus_index].rstrip("+")
-            formula = join_formula_parts(
-                formula,
-                before_roll_bonus,
-                *universal_conditions,
-                roll_bonus,
-            )
-        elif universal_conditions:
-            formula = join_formula_parts(
-                formula,
-                *universal_conditions,
-                damage_suffix,
-            )
-        else:
-            formula += f"+{damage_suffix}"
-    return formula
-
-
-def build_damage_expression(
-    base_formula: str,
-    extra_values: list[str] | None = None,
-    attributes: list[str] | None = None,
-    universal_conditions: list[str] | None = None,
-) -> str:
-    formula = build_damage_roll_formula(
-        base_formula,
-        attributes,
-        universal_conditions,
-    )
-    return build_roll_expression(formula, extra_values)
-
-
-def build_critical_expression(
-    base_formula: str,
-    extra_values: list[str] | None = None,
-    attributes: list[str] | None = None,
-    universal_conditions: list[str] | None = None,
-) -> str:
-    formula = build_damage_roll_formula(
-        base_formula,
-        attributes,
-        universal_conditions,
-    )
-    return build_roll_expression(formula, extra_values)
-
-
-def build_roll_expression(formula: str, extra_values: list[str] | None = None) -> str:
-    expression = f"[[{formula}]]" if formula else ""
-    extras = "".join(value for value in (extra_values or []) if value)
-    if expression and extras:
-        return expression + extras
-    return expression or extras
-
-
-@dataclass
-class QuestionOption:
-    label: str
-    value: str
-    wrap_value: bool | None = None
-
-
-@dataclass
-class MacroQuestion:
-    name: str
-    options: List[QuestionOption] = field(default_factory=list)
-
-    def build(self) -> str:
-        parts = [f"?{{{self.name}"]
-        for option in self.options:
-            parts.append(f"|{option.label},{option.value}")
-        parts.append("}")
-        return "".join(parts)
-
-
-def build_condition_question(
-    name: str,
-    options: List[QuestionOption],
-    wrap_values: bool = True,
-) -> str:
-    parts = [f"?{{{name}"]
-    for option in options:
-        label = option.label.strip()
-        value = option.value.strip()
-        if not value:
-            parts.append(f"|{label}")
-            continue
-        if value and wrap_values and option.wrap_value is not False:
-            value = f"[[{value}]]"
-        if label:
-            parts.append(f"|{label},{value}")
-        else:
-            parts.append(f"|{value}")
-    parts.append("}")
-    return "".join(parts)
-
-
-def build_modified_condition_question(
-    name: str,
-    options: List[QuestionOption],
-    effect_value: str,
-    effect_mode: str,
-    wrap_values: bool = True,
-) -> str:
-    modifier = effect_value.strip()
-    if not modifier:
-        return build_condition_question(name, options, wrap_values)
-
-    question = build_condition_question(name, options, wrap_values=False)
-    operator = "*" if effect_mode == "multiplicativo" else "+"
-    return f"[[({question}{operator}{modifier})]]"
-
-
-def parse_result_modified_condition(
-    text: str,
-) -> tuple[str, str, str] | None:
-    source = (text or "").strip()
-    if not source.startswith("[[(") or not source.endswith(")]]"):
-        return None
-
-    expression = source[3:-3].strip()
-    if not expression.startswith("?{"):
-        return None
-
-    depth = 0
-    index = 0
-    question_end = None
-    while index < len(expression):
-        if expression.startswith("?{", index):
-            depth += 1
-            index += 2
-        elif expression.startswith("&#125;", index) and depth:
-            depth -= 1
-            index += len("&#125;")
-            if depth == 0:
-                question_end = index
-                break
-        elif expression[index] == "}" and depth:
-            depth -= 1
-            index += 1
-            if depth == 0:
-                question_end = index
-                break
-        elif expression.startswith("&#123;", index):
-            index += len("&#123;")
-        elif expression[index] == "{":
-            depth += 1
-            index += 1
-        else:
-            index += 1
-
-    if question_end is None:
-        return None
-
-    question = expression[:question_end]
-    modifier = expression[question_end:].strip()
-    if modifier.startswith("*"):
-        return question, modifier[1:].strip(), "multiplicativo"
-    if modifier.startswith("+"):
-        return question, modifier[1:].strip(), "aditivo"
-    return None
-
-
-def build_advanced_question_value(
-    name: str,
-    options: List[QuestionOption],
-) -> str:
-    parts = [f"?{{{name.translate(ADVANCED_QUESTION_ESCAPES)}"]
-    for option in options:
-        label = option.label.translate(ADVANCED_QUESTION_ESCAPES)
-        value = option.value.translate(ADVANCED_QUESTION_ESCAPES)
-        if not value.strip():
-            parts.append(f"&#124;{label}")
-        elif label.strip():
-            parts.append(f"&#124;{label}&#44;{value}")
-        else:
-            parts.append(f"&#124;{value}")
-    parts.append("&#125;")
-    return "".join(parts)
-
-
-def _split_roll20_parts(text: str, separator: str) -> list[str]:
-    parts = []
-    start = 0
-    index = 0
-    nested_depth = 0
-
-    while index < len(text):
-        if text.startswith("?{", index):
-            nested_depth += 1
-            index += 2
-        elif text.startswith("&#125;", index) and nested_depth:
-            nested_depth -= 1
-            index += len("&#125;")
-        elif text[index] == "}" and nested_depth:
-            nested_depth -= 1
-            index += 1
-        elif text.startswith("&#123;", index):
-            index += len("&#123;")
-        elif text[index] == "{" and nested_depth:
-            nested_depth += 1
-            index += 1
-        elif nested_depth == 0 and text.startswith(separator, index):
-            parts.append(text[start:index])
-            index += len(separator)
-            start = index
-        else:
-            index += 1
-
-    parts.append(text[start:])
-    return parts
-
-
-def infer_named_condition_option(value: str, numeric_label_width: int = 1):
-    value = value.strip()
-    if not value:
-        return "x", ""
-
-    first_digit = re.search(r"\d", value)
-    if first_digit and first_digit.start() > 0:
-        label = value[:first_digit.start()].strip()
-        option_value = value[first_digit.start():].strip()
-        if label and re.match(r"\d", option_value):
-            return label, option_value
-
-    if value.isdigit():
-        return "x", value
-
-    dice_match = re.match(r"\d+d\d+", value, flags=re.IGNORECASE)
-    if dice_match:
-        label_width = max(1, min(numeric_label_width, len(value) - 1))
-        remainder = value[label_width:]
-        if re.match(r"\d+d\d+", remainder, flags=re.IGNORECASE):
-            return value[:label_width], remainder
-
-    return "x", value
-
-
-def looks_like_roll20_condition(text: str) -> bool:
-    source = (text or "").strip()
-    source = source.replace("&lbrack;", "&#91;")
-    source = source.replace("&rbrack;", "&#93;")
-    while source.startswith("[") or source.startswith("&#91;"):
-        source = (
-            source[1:]
-            if source.startswith("[")
-            else source[len("&#91;"):]
-        )
-    return bool(
-        re.match(r"^\?\{.*?(?:\||&#124;)", source)
-        or re.match(r"^\?.+?(?:\||&#124;)", source)
-    )
-
-
-def close_advanced_questions_before_outer_pipe(source: str) -> tuple[str, bool]:
-    stack = []
-    repaired = False
-    index = 0
-
-    while index < len(source):
-        if source.startswith("?{", index):
-            stack.append(False)
-            index += 2
-        elif source.startswith("&#124;", index):
-            if stack:
-                stack[-1] = True
-            index += len("&#124;")
-        elif source.startswith("&#125;", index):
-            if stack:
-                stack.pop()
-            index += len("&#125;")
-        elif source.startswith("&#123;", index):
-            index += len("&#123;")
-        elif source[index] == "|" and len(stack) > 1 and stack[-1]:
-            source = source[:index] + "&#125;" + source[index:]
-            stack.pop()
-            index += len("&#125;")
-            repaired = True
-        elif source[index] == "}" and stack:
-            stack.pop()
-            index += 1
-        else:
-            index += 1
-
-    return source, repaired
-
-
-def parse_roll20_question(text: str):
-    source = (text or "").strip()
-    source = source.replace("&lbrack;", "&#91;")
-    source = source.replace("&rbrack;", "&#93;")
-    repaired = False
-
-    if source.startswith("&#91;&#91;"):
-        source = source[len("&#91;&#91;"):]
-        if source.endswith("&#93;&#93;"):
-            source = source[:-len("&#93;&#93;")]
-        elif source.endswith("&#93;"):
-            source = source[:-len("&#93;")]
-            repaired = True
-        else:
-            repaired = True
-    elif source.startswith("&#91;") and source.endswith("&#93;&#93;"):
-        source = source[len("&#91;"):-len("&#93;&#93;")]
-        repaired = True
-    elif source.endswith("&#93;&#93;"):
-        source = source[:-len("&#93;&#93;")]
-        repaired = True
-    elif source.startswith("[["):
-        source = source[2:]
-        if source.endswith("]]" ):
-            source = source[:-2]
-        elif source.endswith("]"):
-            source = source[:-1]
-            repaired = True
-        else:
-            repaired = True
-    elif source.startswith("[") and source.endswith("]]" ):
-        source = source[1:-2]
-        repaired = True
-    elif source.endswith("]]" ):
-        source = source[:-2]
-        repaired = True
-
-    start = source.find("?{")
-    if start == -1:
-        missing_opening = re.match(r"^\?([^|]+)(\||&#124;)", source)
-        if not missing_opening:
-            return None
-        source = "?{" + source[1:]
-        start = 0
-        repaired = True
-
-    if source[:start].strip():
-        return None
-
-    source, closed_advanced = close_advanced_questions_before_outer_pipe(
-        source[start:]
-    )
-    start = 0
-    repaired = repaired or closed_advanced
-
-    depth = 1
-    index = start + 2
-    body_end = len(source)
-    closed = False
-    while index < len(source):
-        if source.startswith("?{", index):
-            depth += 1
-            index += 2
-        elif source.startswith("&#125;", index):
-            depth -= 1
-            if depth == 0:
-                body_end = index
-                index += len("&#125;")
-                closed = True
-                break
-            index += len("&#125;")
-        elif source[index] == "{":
-            depth += 1
-            index += 1
-        elif source[index] == "}":
-            depth -= 1
-            if depth == 0:
-                body_end = index
-                index += 1
-                closed = True
-                break
-            index += 1
-        else:
-            index += 1
-
-    if not closed:
-        source += "}" * depth
-        body_end = len(source) - 1
-        index = len(source)
-        closed = True
-        repaired = True
-
-    if source[index:].strip():
-        return None
-
-    body = source[start + 2:body_end]
-    pipe_parts = _split_roll20_parts(body, "|")
-    if len(pipe_parts) == 1:
-        pipe_parts = _split_roll20_parts(body, "&#124;")
-    if len(pipe_parts) == 1 and "," in body:
-        comma_parts = _split_roll20_parts(body, ",")
-        if len(comma_parts) > 1:
-            pipe_parts = [
-                comma_parts[0],
-                ",".join(comma_parts[1:]),
-            ]
-        repaired = True
-
-    if len(pipe_parts) > 1:
-        first_option_parts = _split_roll20_parts(pipe_parts[0], ",")
-        if len(first_option_parts) == 1:
-            first_option_parts = _split_roll20_parts(
-                pipe_parts[0],
-                "&#44;",
-            )
-        if len(first_option_parts) > 1:
-            condition_name = first_option_parts[0].strip()
-            first_value = ",".join(first_option_parts[1:]).strip()
-            if condition_name and first_value:
-                pipe_parts = [
-                    condition_name,
-                    f"x,{first_value}",
-                    *pipe_parts[1:],
-                ]
-                repaired = True
-
-    name = pipe_parts[0].strip()
-    if not name:
-        return None
-
-    named_option_labels = []
-    for part in pipe_parts[1:]:
-        named_parts = _split_roll20_parts(part, ",")
-        if len(named_parts) == 1:
-            named_parts = _split_roll20_parts(part, "&#44;")
-        if len(named_parts) > 1 and named_parts[0].strip():
-            named_option_labels.append(named_parts[0].strip())
-
-    numeric_label_width = max(
-        (
-            len(label)
-            for label in named_option_labels
-            if label.isdigit()
-        ),
-        default=1,
-    )
-
-    options = []
-    for part in pipe_parts[1:]:
-        comma_parts = _split_roll20_parts(part, ",")
-        if len(comma_parts) == 1:
-            comma_parts = _split_roll20_parts(part, "&#44;")
-        if len(comma_parts) == 1:
-            value = part.strip()
-            if named_option_labels:
-                label, option_value = infer_named_condition_option(
-                    value,
-                    numeric_label_width,
-                )
-                options.append(QuestionOption(label, option_value))
-                repaired = True
-            else:
-                options.append(QuestionOption(value, ""))
-            continue
-
-        label = comma_parts[0].strip()
-        value = ",".join(comma_parts[1:]).strip()
-        if not label:
-            repaired = True
-            continue
-
-        if len(comma_parts) >= 3:
-            first_value = comma_parts[1].strip()
-            remaining_values = [part.strip() for part in comma_parts[2:]]
-            dice_match = re.search(
-                r"\d+d\d+",
-                first_value,
-                flags=re.IGNORECASE,
-            )
-            if not dice_match:
-                numeric_label_match = re.fullmatch(
-                    r"(\d+)([^\d,]+)",
-                    first_value,
-                )
-                if numeric_label_match:
-                    options.append(
-                        QuestionOption(label, numeric_label_match.group(1))
-                    )
-                    options.append(
-                        QuestionOption(
-                            numeric_label_match.group(2).strip(),
-                            ",".join(remaining_values),
-                        )
-                    )
-                    repaired = True
-                    continue
-            if dice_match:
-                first_roll = first_value[:dice_match.end()].strip()
-                next_label = first_value[dice_match.end():].strip()
-                if (
-                    first_roll
-                    and next_label
-                    and re.fullmatch(r"[^\d,]+", next_label)
-                    and all(remaining_values)
-                ):
-                    options.append(QuestionOption(label, first_roll))
-                    options.append(
-                        QuestionOption(
-                            next_label,
-                            ",".join(remaining_values),
-                        )
-                    )
-                    repaired = True
-                    continue
-
-            next_value = ",".join(remaining_values)
-            if (
-                first_value.isdigit()
-                and re.match(r"\d+d\d+", next_value, flags=re.IGNORECASE)
-            ):
-                if len(first_value) > 1:
-                    first_option_value = first_value[:-1]
-                    next_label = first_value[-1]
-                else:
-                    first_option_value = first_value
-                    next_label = "x"
-                options.append(
-                    QuestionOption(label, first_option_value)
-                )
-                options.append(
-                    QuestionOption(next_label, next_value)
-                )
-                repaired = True
-                continue
-
-            if (
-                first_value.isdigit()
-                and len(first_value) > 1
-                and all(value.isdigit() for value in remaining_values)
-            ):
-                options.append(
-                    QuestionOption(label, first_value[:-1])
-                )
-                options.append(
-                    QuestionOption(
-                        first_value[-1],
-                        ",".join(remaining_values),
-                    )
-                )
-                repaired = True
-                continue
-
-            if first_value and all(remaining_values):
-                options.append(QuestionOption(label, first_value))
-                options.append(
-                    QuestionOption(
-                        "x",
-                        ",".join(remaining_values),
-                    )
-                )
-                repaired = True
-                continue
-
-        left_brackets = len(value) - len(value.lstrip("["))
-        right_brackets = len(value) - len(value.rstrip("]"))
-        if left_brackets or right_brackets:
-            if left_brackets >= 2 and right_brackets >= 2:
-                value = value[2:-2].strip()
-            else:
-                value = value[left_brackets:len(value) - right_brackets if right_brackets else None].strip()
-                repaired = True
-
-        options.append(QuestionOption(label, value))
-
-    return name, options, repaired
-
-
-def extract_roll20_question_names(text: str) -> list[str]:
-    names = []
-    for component in split_roll20_components(text):
-        parsed = parse_roll20_question(component)
-        if not parsed:
-            continue
-
-        name, options, _ = parsed
-        names.append(unescape(name).strip().casefold())
-        for option in options:
-            names.extend(extract_roll20_question_names(option.value))
-    return [name for name in names if name]
-
-
-def split_roll20_components(expression: str) -> list[str]:
-    expression, _ = close_advanced_questions_before_outer_pipe(expression)
-    components = []
-    start = 0
-    index = 0
-    question_depth = 0
-    roll_depth = 0
-
-    while index < len(expression):
-        if question_depth and expression.startswith("+?{", index):
-            component = expression[start:index].strip()
-            if component:
-                components.append(component)
-            index += 1
-            start = index
-            question_depth = 0
-            roll_depth = 0
-        elif expression.startswith("?{", index):
-            question_depth += 1
-            index += 2
-        elif expression.startswith("&#125;", index) and question_depth:
-            question_depth -= 1
-            index += len("&#125;")
-        elif expression[index] == "}" and question_depth:
-            question_depth -= 1
-            index += 1
-        elif not question_depth and expression.startswith("[[", index):
-            roll_depth += 1
-            index += 2
-        elif not question_depth and expression.startswith("]]", index) and roll_depth:
-            roll_depth -= 1
-            index += 2
-        elif not question_depth and not roll_depth and expression[index] == "+":
-            component = expression[start:index].strip()
-            if component:
-                components.append(component)
-            index += 1
-            start = index
-        else:
-            index += 1
-
-    component = expression[start:].strip()
-    if component:
-        components.append(component)
-    return components
-
-
-def _read_macro_template_group(text: str, cursor: int, name: str):
-    prefix = f"{{{{{name}="
-    if not text.startswith(prefix, cursor):
-        return None
-
-    value_start = cursor + len(prefix)
-    index = value_start
-    brace_depth = 0
-    while index < len(text):
-        if brace_depth == 0 and text.startswith("}}", index):
-            return text[value_start:index], index + 2
-        if text.startswith("&#125;", index) and brace_depth:
-            brace_depth -= 1
-            index += len("&#125;")
-        elif text.startswith("&#123;", index):
-            index += len("&#123;")
-        elif text[index] == "{":
-            brace_depth += 1
-            index += 1
-        elif text[index] == "}" and brace_depth:
-            brace_depth -= 1
-            index += 1
-        else:
-            index += 1
-    return None
-
-
-def _read_bracketed_roll(text: str, cursor: int = 0):
-    if not text.startswith("[[", cursor):
-        return None
-
-    index = cursor + 2
-    roll_depth = 1
-    question_depth = 0
-    while index < len(text):
-        if text.startswith("?{", index):
-            question_depth += 1
-            index += 2
-        elif text.startswith("&#125;", index) and question_depth:
-            question_depth -= 1
-            index += len("&#125;")
-        elif text[index] == "}" and question_depth:
-            question_depth -= 1
-            index += 1
-        elif not question_depth and text.startswith("[[", index):
-            roll_depth += 1
-            index += 2
-        elif not question_depth and text.startswith("]]", index):
-            roll_depth -= 1
-            if roll_depth == 0:
-                return text[cursor + 2:index], index + 2
-            index += 2
-        else:
-            index += 1
-    return None
-
-
-def _read_roll20_question(text: str, cursor: int = 0):
-    if not text.startswith("?{", cursor):
-        return None
-
-    index = cursor + 2
-    depth = 1
-    while index < len(text):
-        if text.startswith("?{", index):
-            depth += 1
-            index += 2
-        elif text.startswith("&#125;", index):
-            depth -= 1
-            index += len("&#125;")
-            if depth == 0:
-                return text[cursor:index], index
-        elif text[index] == "{":
-            depth += 1
-            index += 1
-        elif text[index] == "}":
-            depth -= 1
-            index += 1
-            if depth == 0:
-                return text[cursor:index], index
-        else:
-            index += 1
-    return None
-
-
-def _normalize_character_attribute_refs(text: str, character_name: str) -> str:
-    if not character_name:
-        return text
-    pattern = (
-        r"@\{"
-        + re.escape(character_name)
-        + r"\|([^{}|]+)\}"
-    )
-    return re.sub(pattern, r"@{\1}", text)
-
-
-def parse_generated_macro(text: str):
-    source = (text or "").strip()
-    prefix = "&{template:t20-attack}"
-    if not source.startswith(prefix):
-        return None
-
-    cursor = len(prefix)
-    character_group = _read_macro_template_group(source, cursor, "character")
-    if not character_group:
-        return None
-    character_value = character_group[0]
-    character_match = re.fullmatch(
-        r"@\{([^{}|]+)\|character_name\}((?:\r?\n.*)?)",
-        character_value,
-        flags=re.DOTALL,
-    )
-    if character_value == "@{character_name}":
-        character_name = ""
-        character_display = ""
-    elif character_match:
-        character_name = character_match.group(1)
-        character_display = character_match.group(2).lstrip("\r\n")
-    else:
-        return None
-    cursor = character_group[1]
-
-    attack_name = _read_macro_template_group(source, cursor, "attackname")
-    if not attack_name:
-        return None
-    fields = {"attackname": attack_name[0]}
-    cursor = attack_name[1]
-
-    for field_name in (
-        "attackroll",
-        "damageroll",
-        "criticaldamageroll",
-        "typeofdamage",
-    ):
-        while cursor < len(source) and source[cursor].isspace():
-            cursor += 1
-        if source.startswith(f"{{{{{field_name}=", cursor):
-            field = _read_macro_template_group(source, cursor, field_name)
-            if not field:
-                return None
-            fields[field_name] = field[0]
-            cursor = field[1]
-
-    while cursor < len(source) and source[cursor].isspace():
-        cursor += 1
-    description_prefix = "{{description="
-    if not source.startswith(description_prefix, cursor):
-        return None
-    description_start = cursor + len(description_prefix)
-    if not source.endswith("}}"):
-        return None
-    fields["description"] = source[description_start:-2]
-    fields["character_name"] = character_name
-    fields["character_display"] = character_display
-    for field_name in ("attackroll", "damageroll", "criticaldamageroll"):
-        if field_name in fields:
-            fields[field_name] = _normalize_character_attribute_refs(
-                fields[field_name],
-                character_name,
-            )
-            fields[field_name] = fields[field_name].replace(
-                "@{Ameaça}",
-                "20",
-            )
-    return fields
-
-
-def _parse_roll_suffix(text: str):
-    values = []
-    cursor = 0
-    while cursor < len(text):
-        while cursor < len(text) and text[cursor].isspace():
-            cursor += 1
-        if cursor == len(text):
-            break
-        if text.startswith("[[", cursor):
-            parsed_roll = _read_bracketed_roll(text, cursor)
-            if not parsed_roll:
-                return None
-            value, cursor = parsed_roll
-            values.append(value)
-        elif text.startswith("?{", cursor):
-            parsed_question = _read_roll20_question(text, cursor)
-            if not parsed_question:
-                return None
-            value, cursor = parsed_question
-            values.append(value)
-        else:
-            return None
-    return values
-
-
-def _parse_damage_or_critical_group(text: str):
-    modifier = f"+{GLOBALMODIFIERS['Concatenaçao de Dano']}"
-    parsed_roll = _read_bracketed_roll(text)
-    if parsed_roll:
-        roll_formula, cursor = parsed_roll
-        if roll_formula.endswith(modifier):
-            base_formula = roll_formula[:-len(modifier)]
-            extras = _parse_roll_suffix(text[cursor:])
-            if extras is None:
-                return None
-            return base_formula, extras
-
-    extras = _parse_roll_suffix(text)
-    if extras is None:
-        return None
-    return "", extras
-
-
-def _get_damage_extra_strings(values: list[str]) -> list[str]:
-    extras = []
-    for value in values:
-        value = value.strip()
-        if not value:
-            continue
-        if value.startswith("?{") and value.endswith("}"):
-            extras.append(value)
-        else:
-            extras.append(f"[[{value}]]")
-    return extras
-
-
-def render_generated_macro(
-    name: str,
-    attack: str,
-    damage: str,
-    critical: str,
-    damage_type: str,
-    description: str,
-    character_display: str = "",
-) -> str:
-    character = "@{character_name}"
-    if character_display:
-        character += f"\n{character_display}"
-    macro = "&{template:t20-attack}"
-    macro += f"{{{{character={character}}}}}"
-    macro += f"{{{{attackname={name}}}}}"
-    if attack:
-        macro += f"{{{{attackroll=[[{attack}]]}}}}"
-    if damage:
-        macro += f"{{{{damageroll={damage}}}}}"
-    if critical:
-        macro += f"{{{{criticaldamageroll={critical}}}}}"
-    if damage_type:
-        macro += f"{{{{typeofdamage={damage_type}}}}}"
-    return macro + f"{{{{description={description}}}}}"
-
-
-def parse_generated_macro_state(text: str):
-    fields = parse_generated_macro(text)
-    if fields is None:
-        return None
-
-    state = {
-        "attack_name": fields["attackname"],
-        "character_display": fields["character_display"],
-        "attack_roll": "",
-        "attack_threat": "",
-        "attack_skill": "",
-        "attack_extras": [],
-        "damage": "",
-        "damage_additional": "",
-        "damage_extras": [],
-        "critical": "",
-        "damage_type": fields.get("typeofdamage", ""),
-        "description": fields["description"],
-    }
-
-    if "attackroll" in fields:
-        parsed_roll = _read_bracketed_roll(fields["attackroll"])
-        modifier = GLOBALMODIFIERS["Concatenaçao de ataque"]
-        if not parsed_roll or parsed_roll[1] != len(fields["attackroll"]):
-            return None
-        attack_formula = parsed_roll[0]
-        attack_temp_suffix = "+@{ataquetemp}"
-        if not attack_formula.endswith(attack_temp_suffix):
-            return None
-        attack_core = attack_formula[:-len(attack_temp_suffix)]
-
-        skill_found = False
-        for skill, marker in PERICIASATACK.items():
-            skill_marker = f"+{marker}"
-            marker_index = attack_core.find(skill_marker)
-            if marker_index != -1:
-                marker_content_start = marker_index + len(skill_marker)
-                bracket_end = attack_core.find("]]", marker_content_start)
-                if bracket_end == -1:
-                    return None
-                condition_modifiers = attack_core[
-                    marker_content_start:bracket_end
-                ].removeprefix("+").split("+")
-                if sorted(condition_modifiers) != sorted((
-                    GLOBALMODIFIERS["Bonus de Condição"],
-                    GLOBALMODIFIERS["Bonus de Condição2"],
-                )):
-                    return None
-
-                state["attack_skill"] = skill
-                base_attack = attack_core[:marker_index]
-                extras_text = attack_core[bracket_end + 2:]
-                if extras_text.startswith("+"):
-                    extras_text = extras_text[1:]
-                elif extras_text:
-                    return None
-                state["attack_extras"] = (
-                    split_roll20_components(extras_text)
-                    if extras_text
-                    else []
-                )
-                skill_found = True
-                break
-
-        if not skill_found:
-            return None
-        threat_match = re.search(r"cs>(\d+)$", base_attack)
-        if threat_match:
-            state["attack_threat"] = threat_match.group(1)
-            base_attack = base_attack[:threat_match.start()]
-        supported_best_die = (
-            "?{melhor dado| Sim,2d20kh1|Não,1d20}"
-        )
-        if base_attack not in (
-            "1d20",
-            BEST_DIE_FORMULA,
-            supported_best_die,
-        ):
-            return None
-        state["attack_roll"] = base_attack
-        if len(state["attack_extras"]) > 3:
-            return None
-
-    if "damageroll" in fields:
-        parsed_damage = _parse_damage_or_critical_group(fields["damageroll"])
-        if parsed_damage is None:
-            return None
-        state["damage"], state["damage_extras"] = parsed_damage
-        if len(state["damage_extras"]) > 3:
-            return None
-
-    if "criticaldamageroll" in fields:
-        parsed_critical = _parse_damage_or_critical_group(
-            fields["criticaldamageroll"]
-        )
-        if parsed_critical is None:
-            return None
-        state["critical"] = parsed_critical[0]
-        expected_critical_extras = [
-            simplify_condition_questions(value)
-            for value in _get_damage_extra_strings(state["damage_extras"])
-        ]
-        actual_critical_extras = [
-            simplify_condition_questions(value)
-            for value in _get_damage_extra_strings(parsed_critical[1])
-        ]
-        if actual_critical_extras != expected_critical_extras:
-            return None
-
-    damage_extra_values = _get_damage_extra_strings(state["damage_extras"])
-    attack = build_attack_expression(
-        state["attack_roll"],
-        state["attack_threat"],
-        state["attack_skill"],
-        state["attack_extras"],
-    )
-    damage = build_damage_expression(
-        state["damage"],
-        damage_extra_values,
-    )
-    critical_extras = [
-        simplify_condition_questions(value)
-        for value in damage_extra_values
-    ]
-    critical = build_critical_expression(
-        state["critical"],
-        critical_extras,
-    )
-    return state
-
-
-@dataclass
-class MacroButton:
-    text: str
-    action: str
-
-    def build(self) -> str:
-        return f"[{self.text}]({self.action})"
 
 
 class MacroBuilderApp(PreviewMixin):
@@ -1777,18 +79,7 @@ class MacroBuilderApp(PreviewMixin):
         self.resistance_macro_button = None
         self.resistance_macro_gear_button = None
         self.root.title("Roll20 Macro Builder")
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        available_width = max(320, screen_width - 40)
-        available_height = max(240, screen_height - 80)
-        self.root.geometry(
-            f"{min(1100, available_width)}x{min(720, available_height)}"
-        )
-        self.root.minsize(
-            min(720, available_width),
-            min(480, available_height),
-        )
-        self.root.maxsize(available_width, available_height)
+        set_responsive_window_geometry(self.root, 1280, 820, 560, 480)
 
         self.setup_style()
         self.build_ui()
@@ -1799,109 +90,9 @@ class MacroBuilderApp(PreviewMixin):
     # ========================================================
 
     def setup_style(self):
-        style = ttk.Style()
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-
-        style.configure("Title.TLabel", font=("Segoe UI", 14, "bold"))
-        style.configure("Section.TLabel", font=("Segoe UI", 10, "bold"))
-        style.configure("Small.TLabel", font=("Segoe UI", 9))
-        style.configure("DamageStep.TButton", font=("Segoe UI", 18, "bold"), padding=(18, 12))
-        style.configure("DamageDie.TButton", padding=(4, 5))
-        style.configure("Modified.TButton", foreground="#b3261e")
-        style.map("Modified.TButton", foreground=[("active", "#b3261e")])
-        style.configure(
-            "SpecialistSelected.TButton",
-            background="#1976d2",
-            foreground="white",
-        )
-        style.map(
-            "SpecialistSelected.TButton",
-            background=[("active", "#1565c0"), ("!disabled", "#1976d2")],
-            foreground=[("!disabled", "white")],
-        )
-        style.configure(
-            "SpecialistDisabled.TButton",
-            background="#d0d0d0",
-            foreground="#777777",
-        )
-        style.map(
-            "SpecialistDisabled.TButton",
-            background=[("disabled", "#d0d0d0")],
-            foreground=[("disabled", "#777777")],
-        )
-        style.configure(
-            "Selected.TButton",
-            background="#1976d2",
-            foreground="white",
-        )
-        style.map(
-            "Selected.TButton",
-            background=[("active", "#1565c0"), ("!disabled", "#1976d2")],
-            foreground=[("!disabled", "white")],
-        )
-        style.configure(
-            "Pride.TButton",
-            background="#f2c94c",
-            foreground="#3d3000",
-        )
-        style.map(
-            "Pride.TButton",
-            background=[("active", "#e0b83f")],
-            foreground=[("active", "#3d3000")],
-        )
-        style.configure(
-            "EffectInactive.TButton",
-            background="#dceeff",
-            foreground="#174a75",
-        )
-        style.configure(
-            "EffectActive.TButton",
-            background="#1976d2",
-            foreground="white",
-        )
-        style.map(
-            "EffectActive.TButton",
-            background=[("disabled", "#1976d2"), ("active", "#1565c0")],
-            foreground=[("disabled", "white")],
-        )
-        style.configure(
-            "PrideInactive.TButton",
-            background="#fff4cc",
-            foreground="#765600",
-        )
-        style.configure(
-            "PrideActive.TButton",
-            background="#f2c94c",
-            foreground="#3d3000",
-        )
-        style.map(
-            "PrideActive.TButton",
-            background=[("disabled", "#f2c94c"), ("active", "#e0b83f")],
-            foreground=[("disabled", "#3d3000")],
-        )
-        style.configure(
-            "EditorSave.TButton",
-            background="#2e7d32",
-            foreground="white",
-        )
-        style.map(
-            "EditorSave.TButton",
-            background=[("active", "#256628")],
-            foreground=[("active", "white")],
-        )
-        style.configure(
-            "EditorCancel.TButton",
-            background="#c62828",
-            foreground="white",
-        )
-        style.map(
-            "EditorCancel.TButton",
-            background=[("active", "#a91f1f")],
-            foreground=[("active", "white")],
-        )
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        configure_theme(self.root, style)
         self.configure_preview_styles(style)
 
     def build_ui(self):
@@ -1945,11 +136,11 @@ class MacroBuilderApp(PreviewMixin):
         # Topo
         # ----------------------------------------------------
         header = ttk.Frame(self.page_content, padding=(12, 10))
-        header.pack(fill="x")
+        header.pack(fill="x", pady=(8, 4))
 
         ttk.Label(
             header,
-            text="Roll20 Macro Builder",
+            text="Macro Generator",
             style="Title.TLabel"
         ).pack(side="left")
 
@@ -2017,66 +208,67 @@ class MacroBuilderApp(PreviewMixin):
         # ----------------------------------------------------
         # Nome da macro
         # ----------------------------------------------------
-        name_frame = ttk.Frame(self.page_content, padding=(12, 0, 12, 8))
+        name_frame = ttk.Frame(self.page_content, padding=(16, 0, 16, 12))
         name_frame.pack(fill="x")
-
-        ttk.Label(name_frame, text="Nome do ataque:").pack(side="left")
-
+        name_frame.columnconfigure(0, weight=3)
+        name_frame.columnconfigure(1, weight=2)
+        ttk.Label(name_frame, text="NOME DO ATAQUE", style="Small.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 5))
+        ttk.Label(name_frame, text="NOME EXIBIDO", style="Small.TLabel").grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 5))
         self.attack_name_var = tk.StringVar(value="Nome Ataque")
-        name_entry = ttk.Entry(
-            name_frame,
-            textvariable=self.attack_name_var,
-            width=26
-        )
-        name_entry.pack(side="left", padx=(8, 0), fill="x", expand=True)
-        name_entry.bind("<KeyRelease>", lambda e: self.update_preview())
-
-        ttk.Label(name_frame, text="Nome exibido:").pack(
-            side="left",
-            padx=(12, 0),
-        )
         self.character_display_var = tk.StringVar(value="")
-        character_display_entry = ttk.Entry(
-            name_frame,
-            textvariable=self.character_display_var,
-            width=18,
-        )
-        character_display_entry.pack(side="left", padx=(8, 0), fill="x")
-        character_display_entry.bind(
-            "<KeyRelease>",
-            lambda _event: self.update_preview(),
-        )
+        ttk.Entry(name_frame, textvariable=self.attack_name_var, width=20).grid(row=1, column=0, sticky="ew")
+        ttk.Entry(name_frame, textvariable=self.character_display_var, width=16).grid(row=1, column=1, sticky="ew", padx=(12, 0))
+        for variable in (self.attack_name_var, self.character_display_var):
+            variable.trace_add("write", lambda *_: self.update_preview())
 
-        # ----------------------------------------------------
-        # Corpo principal
-        # ----------------------------------------------------
-        body = ttk.PanedWindow(self.page_content, orient="horizontal")
-        body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.workspace_nav = ttk.Frame(self.page_content, padding=(16, 0, 16, 10))
+        self.workspace_section = tk.StringVar(value="editor")
+        for value, label in (("components", "Componentes"), ("editor", "Montar ataque"), ("preview", "Macro e prévia")):
+            ttk.Radiobutton(self.workspace_nav, text=label, value=value,
+                            variable=self.workspace_section, style="Nav.TRadiobutton",
+                            command=self.layout_workspace).pack(side="left", padx=(0, 8))
 
-        # Painel esquerdo - componentes
-        left = ttk.Frame(body, padding=8)
-        left.configure(width=165)
-        left.pack_propagate(False)
-        body.add(left, weight=1)
-
-        # Painel central - campos
-        center = ttk.Frame(body, padding=8)
-        body.add(center, weight=3)
-
-        # Painel direito - preview
-        right = ttk.Frame(body, padding=8)
-        body.add(right, weight=5)
-
-        self.build_component_panel(left)
-        self.build_editor_panel(center)
-        self.build_preview_panel(right)
+        self.workspace = ttk.Frame(self.page_content, padding=(12, 10, 12, 12), style="App.TFrame")
+        self.workspace.pack(fill="both", expand=True)
+        self.workspace.rowconfigure(0, weight=1)
+        self.workspace_panels = {}
+        for key in ("components", "editor", "preview"):
+            self.workspace_panels[key] = ttk.Frame(self.workspace, padding=12, style="Card.TFrame")
+        self.workspace_panels["components"].configure(width=205)
+        self.workspace_panels["components"].pack_propagate(False)
+        self.build_component_panel(self.create_scrollable_panel(self.workspace_panels["components"]))
+        self.build_editor_panel(self.create_scrollable_panel(self.workspace_panels["editor"]))
+        self.build_preview_panel(self.workspace_panels["preview"])
+        self._workspace_compact = None
+        self.layout_workspace()
         self.schedule_page_scrollbar_update()
+
+    def layout_workspace(self):
+        compact = self.page_canvas.winfo_width() < 1120
+        if compact:
+            self.workspace_nav.pack(fill="x", before=self.workspace)
+        else:
+            self.workspace_nav.pack_forget()
+        for panel in self.workspace_panels.values():
+            panel.grid_remove()
+        for column in range(3):
+            self.workspace.columnconfigure(column, weight=0, minsize=0)
+        if compact:
+            self.workspace.columnconfigure(0, weight=1)
+            self.workspace_panels[self.workspace_section.get()].grid(row=0, column=0, sticky="nsew")
+        else:
+            for column, key in enumerate(("components", "editor", "preview")):
+                self.workspace.columnconfigure(column, weight=(0, 3, 4)[column], minsize=(195, 400, 390)[column])
+                self.workspace_panels[key].grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column < 2 else 0)
+        self._workspace_compact = compact
 
     def resize_page_content(self, event):
         self.page_canvas.itemconfigure(
             self.page_canvas_window,
             width=event.width,
         )
+        if hasattr(self, "workspace") and (event.width < 1120) != self._workspace_compact:
+            self.layout_workspace()
         self.schedule_page_scrollbar_update()
 
     def schedule_page_scrollbar_update(self):
@@ -2087,9 +279,9 @@ class MacroBuilderApp(PreviewMixin):
 
     def update_page_scrollbar(self):
         self._page_scroll_update_pending = False
-        self.root.update_idletasks()
-        content_height = self.page_content.winfo_reqheight()
         viewport_height = self.page_canvas.winfo_height()
+        content_height = max(560, viewport_height)
+        self.page_canvas.itemconfigure(self.page_canvas_window, height=content_height)
         needs_scrollbar = content_height > viewport_height + 1
         scrollbar_visible = bool(self.page_scrollbar.winfo_manager())
         if needs_scrollbar != scrollbar_visible:
@@ -2186,7 +378,7 @@ class MacroBuilderApp(PreviewMixin):
             ("Passos de Dano", self.insert_fixed_bonus),
             ("Pergunta Roll20", self.insert_question),
             ("Botão de macro", self.insert_button),
-            ("Importe\n    sua\n Macro", self.insert_custom),
+            ("Importar macro", self.insert_custom),
         ]
 
         for text, command in buttons:
@@ -2294,22 +486,7 @@ class MacroBuilderApp(PreviewMixin):
         scrollbar.pack(side="right", fill="y")
 
         def update_scroll_region(_event=None):
-            bounds = canvas.bbox("all")
-            content_height = bounds[3] if bounds else 0
-            viewport_height = canvas.winfo_height()
-            canvas.configure(
-                scrollregion=(
-                    0,
-                    0,
-                    max(canvas.winfo_width(), bounds[2] if bounds else 0),
-                    max(content_height, viewport_height),
-                )
-            )
-            if content_height > viewport_height + 1:
-                scrollbar.state(["!disabled"])
-            else:
-                scrollbar.state(["disabled"])
-                canvas.yview_moveto(0)
+            update_canvas_scroll_region(canvas, scrollbar)
 
         def scroll_panel(event):
             self.scroll_canvas_by_units(
@@ -2409,18 +586,20 @@ class MacroBuilderApp(PreviewMixin):
         minimum_cell_width,
         maximum_columns=None,
     ):
+        previous_columns = 0
+
         def layout(event):
+            nonlocal previous_columns
             columns = max(1, event.width // minimum_cell_width)
             if maximum_columns is not None:
                 columns = min(columns, maximum_columns)
+            if columns == previous_columns:
+                return
+            for column in range(max(columns, previous_columns)):
+                frame.columnconfigure(column, weight=1 if column < columns else 0)
             for index, widget in enumerate(widgets):
-                widget.grid_configure(
-                    row=index // columns,
-                    column=index % columns,
-                    sticky="ew",
-                )
-            for column in range(columns):
-                frame.columnconfigure(column, weight=1)
+                widget.grid_configure(row=index // columns, column=index % columns, sticky="ew")
+            previous_columns = columns
 
         frame.bind("<Configure>", layout)
 
@@ -3499,9 +1678,12 @@ class MacroBuilderApp(PreviewMixin):
         )
 
     def update_preview(self):
-        if not hasattr(self, "preview"):
+        if not hasattr(self, "preview") or getattr(self, "_preview_job", None):
             return
+        self._preview_job = self.root.after_idle(self._refresh_preview)
 
+    def _refresh_preview(self):
+        self._preview_job = None
         self.update_duplicate_condition_warning()
         macro = self.build_macro()
 
@@ -3517,7 +1699,7 @@ class MacroBuilderApp(PreviewMixin):
         # Insere no campo que estiver com foco.
         widget = self.root.focus_get()
 
-        if isinstance(widget, tk.Entry) and widget.cget("state") != "readonly":
+        if isinstance(widget, (tk.Entry, ttk.Entry)) and str(widget.cget("state")) not in ("readonly", "disabled"):
             widget.insert(tk.INSERT, text)
             widget.event_generate("<KeyRelease>")
         elif isinstance(widget, tk.Text):
@@ -3905,22 +2087,7 @@ class MacroBuilderApp(PreviewMixin):
         fixed_fields_frame.pack(fill="x", pady=(2, 0))
 
         def update_condition_scroll_region(_event=None):
-            bounds = canvas.bbox("all")
-            content_height = bounds[3] if bounds else 0
-            viewport_height = canvas.winfo_height()
-            canvas.configure(
-                scrollregion=(
-                    0,
-                    0,
-                    max(canvas.winfo_width(), bounds[2] if bounds else 0),
-                    max(content_height, viewport_height),
-                )
-            )
-            if content_height > viewport_height + 1:
-                scrollbar.state(["!disabled"])
-            else:
-                scrollbar.state(["disabled"])
-                canvas.yview_moveto(0)
+            update_canvas_scroll_region(canvas, scrollbar)
 
         component_frame.bind(
             "<Configure>",
