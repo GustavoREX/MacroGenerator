@@ -1,0 +1,6 @@
+Pillow==12.3.0
+numpy==2.5.2
+ttkbootstrap==2.2.2
+tkinterdnd2==0.6.2
+rembg==2.0.83
+onnxruntime==1.29.0

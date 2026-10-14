@@ -1,0 +1,11 @@
+{
+  "success": true,
+  "version": "0.02.1.0",
+  "macro": "ok",
+  "token": "ok",
+  "editor": "ok",
+  "state_preserved": true,
+  "border_count": 320,
+  "ai_imports": "ok",
+  "bundled_updater": true
+}

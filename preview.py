@@ -1,3 +1,4 @@
+"""Caixinha dos dados do Roll20, copiei o CSS e é isso, tinha na versão original tbm"""
 import ast
 import re
 import tkinter as tk
@@ -222,6 +223,7 @@ class PreviewMixin:
             macro_toolbar,
             text="Copiar macro",
             command=self.copy_macro,
+            style="Primary.TButton",
         ).pack(side="left", padx=6)
 
         self.duplicate_condition_warning_var = tk.StringVar(value="")
@@ -243,8 +245,15 @@ class PreviewMixin:
             macro_panel,
             wrap="char",
             font=("Consolas", 10),
+            height=9, width=35,
+            background="#f4f7fc", foreground="#24324b",
+            relief="flat", padx=12, pady=12,
+            insertbackground="#315ee7",
         )
-        self.preview.pack(fill="both", expand=True)
+        macro_scrollbar = ttk.Scrollbar(macro_panel, command=self.preview.yview)
+        self.preview.configure(yscrollcommand=macro_scrollbar.set)
+        macro_scrollbar.pack(side="right", fill="y")
+        self.preview.pack(side="left", fill="both", expand=True)
 
         card_toolbar = ttk.Frame(card_panel)
         card_toolbar.pack(fill="x", pady=(8, 4))
