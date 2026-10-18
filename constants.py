@@ -1,7 +1,7 @@
 import re
 
 
-VERSAO = "0.02.1.0"  # Vers?o unificada do Macro Generator x TokenForge.
+VERSAO = "0.02.2.0"  # Versão unificada do Macro Generator x TokenForge.
 RELEASE_API_URL = "https://api.github.com/repos/GustavoREX/MacroGenerator/releases/tags/Newest"
 
 BEST_DIE_FORMULA = "?{melhor dado|Não,1d20|Sim,2d20kh1}"

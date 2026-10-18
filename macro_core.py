@@ -7,6 +7,16 @@ from constants import ADVANCED_QUESTION_ESCAPES, BEST_DIE_FORMULA
 from libraries import DAMAGE_SPECIAL_TRACK_BY_DIE, DAMAGE_STEP_TRACKS, DADOSPADRAO, GLOBALMODIFIERS, PERICIASATACK
 
 
+def render_initiative_macro(extra: str = "", roll_name: str = "Iniciativa") -> str:
+    return (
+        "&{template:t20}{{character=@{character_name}}}"
+        f"{{{{rollname={roll_name.strip() or 'Iniciativa'}}}}}"
+        "{{theroll=Iniciativa [[1d20 + [[@{iniciativatotal}]]"
+        + extra
+        + " &{tracker}]]}}"
+    )
+
+
 def get_damage_step_options() -> list[tuple[str, str]]:
     options = []
     seen_values = set()

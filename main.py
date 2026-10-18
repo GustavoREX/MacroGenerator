@@ -14,8 +14,8 @@ from ui_theme import set_responsive_window_geometry
 APP_NAME = 'Macro x Token'
 DISPLAY_NAME = 'Macro Generator x TokenForge'
 RELEASE_NOTES = (
-    'Atualização completa de Visual.\n\n'
-    'Integração do TokenForge: Plataforma de criação e edição de tokens PNG.'
+    'Adicionado gerenciamento de inventário com o SHOPING.\n\n'
+    'Criação de armas, armaduras e escudos com melhorias, materiais e encantamentos.'
 )
 
 
@@ -59,6 +59,12 @@ class App(TkinterDnD.Tk):
         self.macro_host = ttk.Frame(self.content)
         self.macro = MacroBuilderApp(self, self.macro_host)
         self.token_workspace = TokenWorkspace(self.content)
+        self.weapon_host = ttk.Frame(self.content)
+        self.weapon_workshop = None
+        self.armor_host = ttk.Frame(self.content)
+        self.armor_workshop = None
+        self.shopping_host = ttk.Frame(self.content)
+        self.shopping_workshop = None
         self.header.bind('<Configure>', self._resize_header)
         self.show_tool('macro')
 
@@ -69,25 +75,53 @@ class App(TkinterDnD.Tk):
         if compact is None:
             compact = self.winfo_width() < 800
         for key, button in self.title_buttons.items():
-            selected = key == self.active_tool
+            selected = key == self.active_tool or (key == 'macro' and self.active_tool in ('weapons', 'armor', 'shopping'))
             size = (20 if selected else 15) if compact else (26 if selected else 19)
             button.configure(font=('Segoe UI', size, 'bold' if selected else 'normal'),
                              fg='#315ee7' if selected else '#8490a3',
                              activeforeground='#254bc3' if selected else '#536681')
 
     def show_tool(self, tool):
-        if tool not in ('macro', 'token'):
+        if tool not in ('macro', 'token', 'weapons', 'armor', 'shopping'):
             raise ValueError('Ferramenta desconhecida')
         self.macro_host.pack_forget()
         self.token_workspace.pack_forget()
+        self.weapon_host.pack_forget()
+        self.armor_host.pack_forget()
+        self.shopping_host.pack_forget()
         self.active_tool = tool
-        target = self.macro_host if tool == 'macro' else self.token_workspace
+        if tool == 'weapons' and self.weapon_workshop is None:
+            from weapon_workshop import WeaponWorkshop
+            self.weapon_workshop = WeaponWorkshop(self.weapon_host, self.macro,
+                                                  lambda: self.show_tool('macro'), self.use_custom_weapon)
+            self.weapon_workshop.pack(fill='both', expand=True)
+        if tool == 'armor' and self.armor_workshop is None:
+            from armor_workshop import ArmorWorkshop
+            self.armor_workshop = ArmorWorkshop(self.armor_host, self.macro,
+                                                lambda: self.show_tool('macro'), self.use_custom_weapon)
+            self.armor_workshop.pack(fill='both', expand=True)
+        if tool == 'shopping':
+            if self.shopping_workshop is None:
+                from shopping_ui import ShoppingWorkshop
+                self.shopping_workshop = ShoppingWorkshop(self.shopping_host, self.macro,
+                                                          lambda: self.show_tool('macro'))
+                self.shopping_workshop.pack(fill='both', expand=True)
+            self.shopping_workshop.refresh()
+            if self.macro.get_inventory().lines:
+                self.shopping_workshop.notebook.select(1)
+        target = {'macro': self.macro_host, 'token': self.token_workspace,
+                  'weapons': self.weapon_host, 'armor': self.armor_host,
+                  'shopping': self.shopping_host}[tool]
         target.pack(fill='both', expand=True)
         self._style_titles()
         if tool == 'macro':
             self.macro.update_preview()
-        else:
+        elif tool == 'token':
             self.token_workspace.current.refresh_preview()
+
+    def use_custom_weapon(self, profile):
+        self.macro.apply_custom_weapon(profile)
+        self.show_tool('macro')
 
     def show_release_notes(self, _event=None):
         if self.info_window is not None and self.info_window.winfo_exists():

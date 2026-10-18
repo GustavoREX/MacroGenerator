@@ -7,49 +7,6 @@ ATTRIBUTES = {
     "Carisma": "@{car_mod}",
 }
 
-COMMON_WEAPONS = {
-    "Arco Longo": {
-        "threat": "20",
-        "skill": "Pontaria",
-        "damage": "1d8",
-        "attributes": (),
-        "critical_multiplier": "3",
-        "damage_type": "Perfurante",
-    },
-    "Espada Longa": {
-        "threat": "19",
-        "skill": "Luta",
-        "damage": "?{estilo|uma mão,1d8|duas mãos,1d10}",
-        "attributes": ("Força",),
-        "critical_multiplier": "2",
-        "damage_type": "Corte",
-    },
-    "Machado de Guerra": {
-        "threat": "20",
-        "skill": "Luta",
-        "damage": "1d12",
-        "attributes": ("Força",),
-        "critical_multiplier": "3",
-        "damage_type": "Corte",
-    },
-    "Martelo de Guerra": {
-        "threat": "20",
-        "skill": "Luta",
-        "damage": "1d8",
-        "attributes": ("Força",),
-        "critical_multiplier": "3",
-        "damage_type": "Esmagamento",
-    },
-    "Montante": {
-        "threat": "19",
-        "skill": "Luta",
-        "damage": "2d6",
-        "attributes": ("Força",),
-        "critical_multiplier": "2",
-        "damage_type": "Corte",
-    },
-}
-
 GLOBALMODIFIERS = {
     "Bonus de Ataque": "@{ataquetemp}",
     "Bonus de Condição": "@{condicaomodataque}",

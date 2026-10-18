@@ -12,7 +12,6 @@ from constants import (
 )
 from libraries import (
     ATTRIBUTES,
-    COMMON_WEAPONS,
     DAMAGE_STEP_TRACKS,
     DADOSCOMUNS,
     DADOSEXOTICOS,
@@ -23,8 +22,10 @@ from ui_theme import configure_theme, update_canvas_scroll_region
 from preview import PreviewMixin, format_roll_preview, get_preview_question_choices
 
 from ui_theme import set_responsive_window_geometry
+from weapon_ui import WeaponBrowser
 
 from macro_core import (
+    render_initiative_macro,
     get_damage_step_options,
     get_damage_step_delta,
     get_damage_step_track,
@@ -79,6 +80,17 @@ class MacroBuilderApp(PreviewMixin):
         self.resistance_macro_effect_mode = "multiplicativo"
         self.resistance_macro_button = None
         self.resistance_macro_gear_button = None
+        self.initiative_macro_extra = ""
+        self.initiative_macro_roll_name = "Iniciativa"
+        self.initiative_macro_question_name = "Pergunta"
+        self.initiative_macro_question_options = []
+        self.initiative_macro_pride_enabled = False
+        self.initiative_macro_effect_enabled = True
+        self.initiative_macro_effect_value = ""
+        self.initiative_macro_effect_mode = "multiplicativo"
+        self.initiative_macro_button = None
+        self.initiative_macro_gear_button = None
+        self.root.bind("<Destroy>", self._cancel_pending_preview, add="+")
         if not self.embedded:
             self.root.title("Macro x Token")
             set_responsive_window_geometry(self.root, 1280, 820, 560, 480)
@@ -100,6 +112,7 @@ class MacroBuilderApp(PreviewMixin):
 
     def build_ui(self):
         page_viewport = ttk.Frame(self.parent)
+        self.page_viewport = page_viewport
         page_viewport.pack(fill="both", expand=True)
         page_viewport.columnconfigure(0, weight=1)
         page_viewport.rowconfigure(0, weight=1)
@@ -227,8 +240,6 @@ class MacroBuilderApp(PreviewMixin):
             self.page_canvas.yview_moveto(0)
 
     def scroll_main_page(self, event):
-        if self.embedded and not self.parent.winfo_ismapped():
-            return None
         widget = event.widget
         scroll_canvas = None
         if isinstance(widget, ttk.Scrollbar):
@@ -243,15 +254,26 @@ class MacroBuilderApp(PreviewMixin):
         else:
             current = widget
             while current is not None and current is not self.root:
+                # Textos e listas têm sua própria rolagem nativa.
+                if isinstance(current, (tk.Text, tk.Listbox, ttk.Treeview)):
+                    return None
                 if isinstance(current, tk.Canvas):
                     scroll_canvas = current
                     break
                 current = current.master
 
         if scroll_canvas is not None and scroll_canvas is not self.page_canvas:
+            # Os criadores e o SHOPING são irmãos da tela da macro na aplicação
+            # integrada. Seus painéis continuam roláveis quando ela está oculta.
+            if (self.embedded and not self.parent.winfo_ismapped()
+                    and not getattr(scroll_canvas, "_macro_scroll_panel", False)):
+                return None
             direction = self.get_scroll_direction(event)
             self.scroll_canvas_by_units(scroll_canvas, direction)
             return "break"
+
+        if self.embedded and not self.parent.winfo_ismapped():
+            return None
 
         widget_path = str(widget)
         content_path = str(self.page_content)
@@ -306,7 +328,7 @@ class MacroBuilderApp(PreviewMixin):
         ).pack(anchor="w", pady=(0, 12))
 
         buttons = [
-            ("Armas comuns", self.open_common_weapons_dialog),
+            ("Armas", self.open_weapons_dialog),
             ("Passos de Dano", self.insert_fixed_bonus),
             ("Pergunta Roll20", self.insert_question),
             ("Botão de macro", self.insert_button),
@@ -384,8 +406,48 @@ class MacroBuilderApp(PreviewMixin):
                 self.update_resistance_macro_gear_style()
                 continue
 
+            if name == "Constituição":
+                initiative_frame = ttk.Frame(attr_frame)
+                initiative_frame.pack(fill="x", pady=2)
+                self.initiative_macro_button = ttk.Button(
+                    initiative_frame,
+                    text="⚡ Iniciativa",
+                    command=self.copy_initiative_macro,
+                    padding=(4, 8),
+                )
+                self.initiative_macro_button.pack(side="left", fill="x", expand=True)
+                self.initiative_macro_gear_button = ttk.Button(
+                    initiative_frame,
+                    text="⚙",
+                    width=3,
+                    command=lambda: self.open_skill_macro_editor("initiative"),
+                )
+                self.initiative_macro_gear_button.pack(side="left", padx=(4, 0))
+                self.update_initiative_macro_gear_style()
+                continue
+
+            if name == "Inteligência":
+                ttk.Separator(parent).pack(fill="x", pady=12)
+                ttk.Label(parent, text="Inventário", style="Section.TLabel").pack(
+                    anchor="w", pady=(0, 6))
+                inventory_frame = ttk.Frame(parent)
+                inventory_frame.pack(fill="x")
+                ttk.Button(inventory_frame, text="🗡️ Crie sua arma", command=self.open_weapon_workshop,
+                           padding=(4, 8)).pack(fill="x", pady=2)
+                continue
+
+            if name == "Sabedoria":
+                ttk.Button(inventory_frame, text="🛡 Crie sua Armadura", command=self.open_armor_workshop,
+                           padding=(4, 8)).pack(fill="x", pady=2)
+                continue
+
+            if name == "Carisma":
+                ttk.Button(inventory_frame, text="🛒 SHOPING", command=self.open_shopping,
+                           padding=(4, 8)).pack(fill="x", pady=2)
+                continue
+
             ttk.Button(
-                attr_frame,
+                inventory_frame,
                 text=name,
                 command=lambda c=code: self.insert_text(c),
                 padding=(4, 8),
@@ -406,6 +468,7 @@ class MacroBuilderApp(PreviewMixin):
             pady=pady,
         )
         canvas = tk.Canvas(container, highlightthickness=0)
+        canvas._macro_scroll_panel = True
         if canvas_height is not None:
             canvas.configure(height=canvas_height)
         scrollbar = ttk.Scrollbar(
@@ -1614,6 +1677,11 @@ class MacroBuilderApp(PreviewMixin):
             return
         self._preview_job = self.root.after_idle(self._refresh_preview)
 
+    def _cancel_pending_preview(self, event):
+        if event.widget == self.root and getattr(self, "_preview_job", None):
+            self.root.after_cancel(self._preview_job)
+            self._preview_job = None
+
     def _refresh_preview(self):
         self._preview_job = None
         self.update_duplicate_condition_warning()
@@ -1652,37 +1720,105 @@ class MacroBuilderApp(PreviewMixin):
         entry.focus_set()
         self.update_preview()
 
-    def open_common_weapons_dialog(self):
-        win = tk.Toplevel(self.root)
-        win.title("Armas comuns")
-        set_responsive_window_geometry(win, 320, 300, 280, 220)
-        win.transient(self.root)
-        win.grab_set()
+    def open_weapons_dialog(self):
+        WeaponBrowser(self)
 
-        ttk.Label(
-            win,
-            text="Escolha uma arma:",
-            style="Section.TLabel"
-        ).pack(anchor="w", padx=15, pady=(15, 8))
+    def get_inventory(self):
+        if not hasattr(self, "inventory"):
+            from shopping_core import Inventory, default_inventory_path
+            self.inventory = Inventory(default_inventory_path())
+        return self.inventory
 
-        weapon_buttons_frame = self.create_scrollable_panel(
-            win,
-            padx=15,
-            pady=(0, 12),
-        )
-        for weapon_name in COMMON_WEAPONS:
-            ttk.Button(
-                weapon_buttons_frame,
-                text=weapon_name,
-                command=lambda name=weapon_name: self.apply_common_weapon(
-                    name,
-                    win,
-                ),
-            ).pack(fill="x", pady=3)
+    def open_shopping(self):
+        if hasattr(self.root, "show_tool"):
+            self.root.show_tool("shopping")
+            return
+        from shopping_ui import ShoppingWorkshop
+        if not hasattr(self, "shopping_workshop"):
+            self.shopping_workshop = ShoppingWorkshop(self.parent, self, self.close_shopping)
+        for name in ("weapon_workshop", "armor_workshop"):
+            if hasattr(self, name):
+                getattr(self, name).pack_forget()
+        self.page_viewport.pack_forget()
+        self.shopping_workshop.refresh()
+        if self.get_inventory().lines:
+            self.shopping_workshop.notebook.select(1)
+        self.shopping_workshop.pack(fill="both", expand=True)
 
-    def apply_common_weapon(self, weapon_name, window):
-        weapon = COMMON_WEAPONS[weapon_name]
+    def close_shopping(self):
+        self.shopping_workshop.pack_forget()
+        self.page_viewport.pack(fill="both", expand=True)
 
+    def add_custom_to_inventory(self, design, base, quote, profile):
+        from shopping_core import custom_item
+        item = custom_item(design, base, quote, profile)
+        self.get_inventory().add(item)
+        for owner in (self, self.root):
+            shopping = getattr(owner, "shopping_workshop", None)
+            if shopping is not None:
+                shopping.refresh()
+        return item
+
+    def open_weapon_workshop(self):
+        if hasattr(self.root, "show_tool"):
+            self.root.show_tool("weapons")
+            return
+        from weapon_workshop import WeaponWorkshop
+        if not hasattr(self, "weapon_workshop"):
+            self.weapon_workshop = WeaponWorkshop(self.parent, self, self.close_weapon_workshop,
+                                                  self.generate_custom_weapon)
+        self.page_viewport.pack_forget()
+        self.weapon_workshop.pack(fill="both", expand=True)
+
+    def close_weapon_workshop(self):
+        self.weapon_workshop.pack_forget()
+        self.page_viewport.pack(fill="both", expand=True)
+
+    def open_armor_workshop(self):
+        if hasattr(self.root, "show_tool"):
+            self.root.show_tool("armor")
+            return
+        from armor_workshop import ArmorWorkshop
+        if not hasattr(self, "armor_workshop"):
+            self.armor_workshop = ArmorWorkshop(self.parent, self, self.close_armor_workshop,
+                                                self.generate_custom_shield)
+        self.page_viewport.pack_forget()
+        self.armor_workshop.pack(fill="both", expand=True)
+
+    def close_armor_workshop(self):
+        self.armor_workshop.pack_forget()
+        self.page_viewport.pack(fill="both", expand=True)
+
+    def generate_custom_shield(self, profile):
+        self.apply_custom_weapon(profile)
+        self.close_armor_workshop()
+
+    def generate_custom_weapon(self, profile):
+        self.apply_custom_weapon(profile)
+        self.close_weapon_workshop()
+
+    def apply_custom_weapon(self, profile):
+        self.apply_weapon(profile["name"], profile)
+        self.damage_additional_var.set(profile["flat_damage"])
+        self.attack_extra_vars[0].set(profile["attack_bonus"])
+        self.attack_extra_enabled_var.set(bool(profile["attack_bonus"]))
+        self.toggle_attack_extra_field()
+        extras = list(profile["extras"])
+        if len(extras) > len(self.damage_extra_vars):
+            extras = extras[:len(self.damage_extra_vars) - 1] + [
+                "+".join(extras[len(self.damage_extra_vars) - 1:])]
+        for variable, value in zip(self.damage_extra_vars, extras):
+            variable.set(value)
+        self.damage_extra_enabled_var.set(bool(extras))
+        self.toggle_damage_extra_field()
+        self.description_text.delete("1.0", "end")
+        self.description_text.insert("1.0", profile["description"])
+        self.critical_var.set(profile["critical"])
+        self.workspace_section.set("editor")
+        self.layout_workspace()
+        self.update_preview()
+
+    def apply_weapon(self, weapon_name, weapon, window=None):
         self.attack_name_var.set(weapon_name)
         self.attack_best_die_var.set("nao")
         self.attack_roll_var.set("1d20")
@@ -1710,7 +1846,8 @@ class MacroBuilderApp(PreviewMixin):
         self.toggle_exotic_dice_field()
         self.sync_critical_from_damage()
         self.update_preview()
-        window.destroy()
+        if window is not None:
+            window.destroy()
 
     def insert_fixed_bonus(self):
         win = tk.Toplevel(self.root)
@@ -3174,6 +3311,21 @@ class MacroBuilderApp(PreviewMixin):
             + SKILL_MACRO_CLOSING
         )
 
+    def update_initiative_macro_gear_style(self):
+        if self.initiative_macro_gear_button is not None:
+            self.initiative_macro_gear_button.configure(
+                style="Modified.TButton" if (
+                    self.initiative_macro_extra
+                    or self.initiative_macro_roll_name != "Iniciativa"
+                ) else "TButton"
+            )
+
+    def build_initiative_macro(self):
+        return render_initiative_macro(
+            self.initiative_macro_extra,
+            self.initiative_macro_roll_name,
+        )
+
     def build_skill_question_extra(
         self,
         name,
@@ -3227,12 +3379,23 @@ class MacroBuilderApp(PreviewMixin):
             "A macro de Resistências foi copiada para a área de transferência.",
         )
 
+    def copy_initiative_macro(self):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(self.build_initiative_macro())
+        self.root.update()
+        messagebox.showinfo(
+            "Macro de Iniciativa copiada",
+            "A macro de Iniciativa foi copiada para a área de transferência.",
+        )
+
     def open_skill_macro_editor(self, macro_type="skill"):
         is_skill_macro = macro_type == "skill"
-        state_prefix = (
-            "skill_macro" if is_skill_macro else "resistance_macro"
-        )
-        section_name = "Perícias" if is_skill_macro else "Resistências"
+        is_initiative_macro = macro_type == "initiative"
+        state_prefix, section_name = {
+            "skill": ("skill_macro", "Perícias"),
+            "resistance": ("resistance_macro", "Resistências"),
+            "initiative": ("initiative_macro", "Iniciativa"),
+        }[macro_type]
         get_setting = lambda name: getattr(
             self,
             f"{state_prefix}_{name}",
@@ -3309,6 +3472,15 @@ class MacroBuilderApp(PreviewMixin):
                 editor_canvas.after_idle(update_editor_scroll_region),
             ),
         )
+
+        if is_initiative_macro:
+            ttk.Label(editor_content, text="Nome da rolagem:", style="Section.TLabel").pack(
+                anchor="w", padx=15, pady=(15, 4))
+            roll_name_var = tk.StringVar(value=get_setting("roll_name"))
+            ttk.Entry(editor_content, textvariable=roll_name_var).pack(fill="x", padx=15)
+            ttk.Label(editor_content, text="Os efeitos serão somados antes de enviar o total "
+                      "ao rastreador de turnos.", wraplength=680).pack(
+                          anchor="w", padx=15, pady=(6, 0))
 
         ttk.Label(
             editor_content,
@@ -3776,6 +3948,8 @@ class MacroBuilderApp(PreviewMixin):
             set_setting("effect_enabled", effect_active_var.get())
             set_setting("effect_value", effect_value_var.get())
             set_setting("effect_mode", effect_mode_var.get())
+            if is_initiative_macro:
+                set_setting("roll_name", roll_name_var.get().strip() or "Iniciativa")
             if is_skill_macro:
                 set_setting("specialist_enabled", specialist_active_var.get())
                 set_setting("specialist_skills", specialist_skills)
@@ -3793,6 +3967,8 @@ class MacroBuilderApp(PreviewMixin):
             ))
             if is_skill_macro:
                 self.update_skill_macro_gear_style()
+            elif is_initiative_macro:
+                self.update_initiative_macro_gear_style()
             else:
                 self.update_resistance_macro_gear_style()
             win.destroy()
