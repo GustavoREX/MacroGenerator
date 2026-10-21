@@ -1,5 +1,5 @@
-"""Por pura preguiça, vai usar o antigo tk root do Updater... bom não dura tanto e mal é notavel
-então deixei só pra não explodir
+"""Por pura preguiça, vai usar o antigo tk root do Updater...
+então deixei só pra não explodir, e ser facil de iniciar sem compilar
 """
 import multiprocessing
 import sys

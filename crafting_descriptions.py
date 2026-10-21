@@ -38,7 +38,7 @@ PM_ACTIVATIONS = {
 
 def compact_weapon_description(design):
     names = [base_name(design.weapon_name), *(base_name(name) for name in design.improvements),
-             base_name(design.material), *(base_name(name) for name in design.enchantments)]
+             base_name(design.material), base_name(design.second_material), *(base_name(name) for name in design.enchantments)]
     rd = sum({"Penetrante": 5, "Aço-rubi": 10, "Energética": 20}.get(name, 0) for name in names)
     parts = []
     # O machado de lenha só ignora esses 5 pontos contra objetos e construtos.

@@ -172,6 +172,12 @@ class WeaponDesign:
     damage_override: str = ""
     lancinante_mode: str = "+10"
     red_matter_immune: bool = False
+    genius_innovator: bool = False
+    second_material: str = ""
+    second_material_price_override: Decimal | None = None
+    existing_second_material: str = ""
+    innovations: tuple[str, ...] = ()
+    existing_innovations: int = 0
 
 
 @dataclass(frozen=True)
@@ -189,12 +195,28 @@ class WeaponQuote:
     enchantment_count: int
     improvement_dc: int
     enchantment_dc: int
+    innovation_price: Decimal = Decimal(0)
+    innovation_due: Decimal = Decimal(0)
+    innovation_dc: int = 0
+    innovation_count: int = 0
 
 
 def validate_design(design):
     if design.weapon_name not in WEAPONS:
         raise ValueError("Escolha uma arma-base não mágica do catálogo.")
     weapon = WEAPONS[design.weapon_name]
+    from innovation_data import INNOVATIONS, innovation_reason
+    if len(design.innovations)>4 or len(set(design.innovations))!=len(design.innovations):
+        raise ValueError("Limite de quatro inovações diferentes, separado das melhorias.")
+    if not 0 <= design.existing_innovations <= len(design.innovations) or design.existing_innovations and not design.owned:
+        raise ValueError("Confira a quantidade anterior de inovações do item possuído.")
+    firearm = weapon.get('category') == 'Armas de fogo' or 'híbrida' in weapon.get('description','') and 'fogo' in weapon.get('description','')
+    for name in design.innovations:
+        if name not in INNOVATIONS:
+            raise ValueError("Inovação desconhecida: "+name)
+        reason=innovation_reason(name,design.innovations,design.improvements,firearm=firearm)
+        if reason:
+            raise ValueError(name+": "+reason)
     if design.size not in SIZE_STEPS or design.construction not in ("Metal", "Madeira", "Outra"):
         raise ValueError("Escolha um tamanho e uma construção válidos.")
     for selected, catalog, kind in ((design.improvements, IMPROVEMENTS, "improvement"),
@@ -211,18 +233,23 @@ def validate_design(design):
                                          design.enchantments, design.material)
             if reason:
                 raise ValueError(f"{name}: {reason}")
-    if design.material:
-        if design.material not in MATERIALS:
+    if design.second_material and (not design.genius_innovator or not design.material or design.second_material == design.material):
+        raise ValueError("Dois materiais diferentes exigem Gênio Inovador e um primeiro material.")
+    for material in filter(None, (design.material, design.second_material)):
+        if material not in MATERIALS:
             raise ValueError("Escolha apenas um material especial válido.")
-        reason = incompatibility(weapon, MATERIALS[design.material], "material", design.construction)
+        reason = incompatibility(weapon, MATERIALS[material], "material", design.construction)
         if reason:
-            raise ValueError(f"{design.material}: {reason}")
+            raise ValueError(f"{material}: {reason}")
     if design.existing_material and design.existing_material not in MATERIALS:
         raise ValueError("Material anterior desconhecido.")
-    improvements = len(design.improvements) + bool(design.material)
+    if design.existing_second_material and (design.existing_second_material not in MATERIALS or not design.owned
+            or not design.genius_innovator or design.existing_improvements < 2 or not design.second_material):
+        raise ValueError("O segundo material anterior exige item possuído, Gênio Inovador, duas melhorias anteriores e dois materiais finais.")
+    improvements = len(design.improvements) + bool(design.material) + bool(design.second_material)
     enchantments = len(design.enchantments)
-    if improvements > 4:
-        raise ValueError("Limite de 4 melhorias, incluindo o material especial.")
+    if improvements > (5 if design.genius_innovator else 4):
+        raise ValueError("Limite de 4 melhorias (5 com Gênio Inovador), incluindo materiais.")
     if enchantments > 3:
         raise ValueError("Limite de 3 encantamentos.")
     if not (0 <= design.existing_improvements <= improvements
@@ -250,21 +277,29 @@ def quote_weapon(design):
         base = money(design.base_price_override if design.base_price_override is not None else weapon["price"])
     except ValueError:
         raise ValueError("Informe o preço-base desta arma em T$.") from None
-    material = material_price(design.material, design.material_price_override)
-    return quote_from_prices(design, base, material, count, enchantments)
+    primary = material_price(design.material, design.material_price_override)
+    material = primary + material_price(design.second_material, design.second_material_price_override)
+    return quote_from_prices(design, base, material, count, enchantments, retained_material=primary)
 
 
-def quote_from_prices(design, base, material, count, enchantments):
+def quote_from_prices(design, base, material, count, enchantments, *, retained_material=None):
     """Progressões compartilhadas pelos criadores de equipamentos."""
-    improvement = Decimal(IMPROVEMENT_COSTS[count])
+    paid_count = max(0, count - bool(design.genius_innovator))
+    improvement = Decimal(IMPROVEMENT_COSTS[paid_count])
     enchantment = Decimal(ENCHANTMENT_COSTS[enchantments])
-    improvement_due = improvement - IMPROVEMENT_COSTS[design.existing_improvements]
+    improvement_due = max(Decimal(0), improvement - IMPROVEMENT_COSTS[min(4, design.existing_improvements)])
     enchantment_due = enchantment - ENCHANTMENT_COSTS[design.existing_enchantments]
-    material_due = Decimal(0) if design.material == design.existing_material else material
+    old_materials = {design.existing_material, design.existing_second_material} - {""}
+    primary_price = material if retained_material is None else retained_material
+    material_due = (Decimal(0) if design.material in old_materials else primary_price)
+    if design.second_material:
+        material_due += Decimal(0) if design.second_material in old_materials else material-primary_price
     due = improvement_due + enchantment_due + material_due + (0 if design.owned else base)
-    return WeaponQuote(base, improvement, enchantment, material, base + improvement + enchantment + material,
-                       due, improvement_due, enchantment_due, material_due, count, enchantments,
-                       count * 5, ENCHANTMENT_DC[enchantments])
+    innovation=Decimal(IMPROVEMENT_COSTS[len(design.innovations)])
+    innovation_due=innovation-IMPROVEMENT_COSTS[design.existing_innovations]
+    return WeaponQuote(base, improvement, enchantment, material, base + improvement + enchantment + material + innovation,
+                       due + innovation_due, improvement_due, enchantment_due, material_due, count, enchantments,
+                       count * 5, ENCHANTMENT_DC[enchantments],innovation,innovation_due,len(design.innovations)*5,len(design.innovations))
 
 
 def shift_damage(damage, steps):
@@ -289,8 +324,8 @@ def custom_weapon_profile(design, *, weapon=None, extra_magic_bonus=0):
     profile = dict(profiles[design.profile_index])
     names = {base_name(n).casefold() for n in design.improvements}
     enchants = {base_name(n).casefold() for n in design.enchantments}
-    material = base_name(design.material)
-    steps = SIZE_STEPS[design.size] + (material in ("Adamante", "Couraça de kaiju"))
+    materials = {base_name(m) for m in (design.material, design.second_material) if m}
+    steps = SIZE_STEPS[design.size] + len(materials & {"Adamante", "Couraça de kaiju"})
     original_damage = profile["damage"]
     if design.damage_override:
         if not re.fullmatch(r"\d+d\d+", design.damage_override):
@@ -303,7 +338,7 @@ def custom_weapon_profile(design, *, weapon=None, extra_magic_bonus=0):
         threat = int(profile["threat"])
         if "ameaçadora" in enchants:
             threat = 21 - (21 - threat) * 2
-        threat -= ("precisa" in names) + (material == "Mitral")
+        threat -= ("precisa" in names) + ("Mitral" in materials)
         profile["threat"] = str(max(2, threat))
         profile["critical_multiplier"] = str(int(profile["critical_multiplier"]) + ("maciça" in names))
     magic_bonus = max(extra_magic_bonus, 4 if "magnífica" in enchants else 2 if "formidável" in enchants else 0)
@@ -323,22 +358,22 @@ def custom_weapon_profile(design, *, weapon=None, extra_magic_bonus=0):
                             ("tumular", "1d8", "Trevas"), ("cristalina", "1d6", "Luz")):
         if name in enchants:
             extra(die, kind)
-    if material == "Gelo eterno":
+    if "Gelo eterno" in materials:
         extra("2", "Frio")
-    if material == "Cristal de sol":
+    if "Cristal de sol" in materials:
         extra("2", "Fogo")
-    if material == "Matéria vermelha" and not design.red_matter_immune:
+    if "Matéria vermelha" in materials and not design.red_matter_immune:
         extra("1d6", profile["damage_type"] or "Dano")
     if "piedosa" in enchants:
         extra("1d8", profile["damage_type"] or "Dano")
     if "energética" in enchants:
         types = ["Essência"]
     profile["damage_type"] = " | ".join(types) + (" (não letal)" if "piedosa" in enchants else "")
-    critical_steps = (2 if material == "Pena de kraken" else 0)
+    critical_steps = (2 if "Pena de kraken" in materials else 0)
     critical_steps += (1 if base_name(weapon["name"]) == "Presa de serpente" else 0)
     critical_die = (shift_damage(design.damage_override, critical_steps) if design.damage_override
                     else shift_damage(original_damage, steps + critical_steps))
-    if material == "Quitina razza":
+    if "Quitina razza" in materials:
         damage += "!"
         critical_die += "!"
         profile["damage"] = damage
@@ -364,5 +399,8 @@ def custom_weapon_profile(design, *, weapon=None, extra_magic_bonus=0):
                    flat_damage=str(flat_damage) if flat_damage and damage else "", extras=extras,
                    critical=critical)
     profile["description"] = compact_weapon_description(design)
+    if design.innovations:
+        from innovation_data import INNOVATIONS
+        profile["description"] += " | Inovações do Mestre de Armearia (sem valor comercial; dependem do criador): " + " | ".join(name+": "+INNOVATIONS[name]['description'] for name in design.innovations)
     profile["name"] = design.name.strip() or weapon["name"] + " customizada"
     return profile

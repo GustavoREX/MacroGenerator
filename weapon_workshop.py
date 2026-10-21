@@ -38,14 +38,22 @@ class WeaponWorkshop(ttk.Frame):
         self._update_job = None
         self._pruning = False
         self.result_profile = None
+        from forge_ui import InfoPopup, QuoteCards, ModeToggle
+        self.forge_info = InfoPopup(self)
         self.info = WeaponInfoPopup(self.winfo_toplevel())
         self.bind("<Unmap>", lambda event: self.info.hide() if event.widget == self else None)
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 8))
         ttk.Button(header, text="← Macro Generator", command=on_back).pack(side="right")
         ttk.Label(header, text=self.workshop_title, style="Section.TLabel").pack(anchor="w")
-        ttk.Label(self, text="Monte a configuração final, incluindo os efeitos que o item já possui. "
-                  "Materiais contam como uma melhoria.", wraplength=900).pack(anchor="w", pady=(0, 8))
+        self.intro_label = ttk.Label(self, text="Monte a configuração final, incluindo os efeitos que o item já possui. "
+                  "Materiais contam como uma melhoria.", wraplength=900)
+        self.intro_label.pack(anchor="w", pady=(0, 8))
+        self.fabricate_var = tk.BooleanVar(self, False)
+        self.mode_toggle = ModeToggle(self, self.fabricate_var)
+        self.mode_toggle.pack(fill='x')
+        self.forge_cards = QuoteCards(self)
+        self.forge_cards.pack(fill="x", pady=(0, 10))
         self.body = ttk.Panedwindow(self, orient="horizontal")
         self.body.pack(fill="both", expand=True)
         settings_panel = ttk.Frame(self.body, width=380)
@@ -72,17 +80,21 @@ class WeaponWorkshop(ttk.Frame):
         self.enchantment_vars = {name: tk.BooleanVar(self, False) for name in self.enchantments}
 
         def field(label, variable, values=None):
-            ttk.Label(settings, text=label).pack(anchor="w", pady=(9, 3))
+            host = ttk.Frame(settings)
+            host.pack(fill='x')
+            self.field_rows[label] = host
+            ttk.Label(host, text=label).pack(anchor="w", pady=(9, 3))
             if values is None:
-                widget = ttk.Entry(settings, textvariable=variable)
+                widget = ttk.Entry(host, textvariable=variable)
             else:
-                widget = ttk.Combobox(settings, textvariable=variable, values=values, state="readonly")
+                widget = ttk.Combobox(host, textvariable=variable, values=values, state="readonly")
             widget.pack(fill="x")
             self.form_fields[label] = widget
             return widget
 
         # A busca reduz as opções da arma sem permitir que uma arma mágica entre na seleção.
         self.form_fields = {}
+        self.field_rows = {}
         self.weapon_search_var = tk.StringVar(self)
         field("Buscar item-base", self.weapon_search_var)
         self.weapon_combo = field(self.item_label, self.weapon_var, tuple(self.items))
@@ -95,24 +107,48 @@ class WeaponWorkshop(ttk.Frame):
         ttk.Checkbutton(settings, text=self.owned_label, variable=self.owned_var).pack(
             anchor="w", pady=(12, 2))
         self.old_improvements_widget = field("Quantas melhorias ela já possui? (inclua material)",
-                                              self.old_improvements_var, tuple(range(5)))
+                                              self.old_improvements_var, tuple(range(6)))
         self.old_enchantments_widget = field(self.old_enchantments_label,
                                               self.old_enchantments_var, tuple(range(4)))
         self.old_material_widget = field("Material especial que ela já possui", self.old_material_var,
                                           ("Nenhum", *self.materials))
         self.old_material_widget.bind("<<ComboboxSelected>>", self._old_material_changed)
         self.material_quote_widget = field("Cotação do material raro (T$; quando exigida)", self.material_price_var)
+        self.genius_var = tk.BooleanVar(self, False)
+        self.second_material_var = tk.StringVar(self, "Nenhum")
+        self.second_material_price_var = tk.StringVar(self)
+        self.old_second_material_var = tk.StringVar(self, "Nenhum")
+        from forge_ui import info_button
+        genius_row=ttk.Frame(settings)
+        genius_row.pack(fill="x",pady=(8,2))
+        ttk.Checkbutton(genius_row, text="Gênio Inovador",variable=self.genius_var).pack(side="left")
+        info_button(genius_row,self.forge_info,"Gênio Inovador","Uma melhoria extra gratuita, fora do limite, e dois materiais especiais. A forja presume a habilitação para usar este benefício. Heróis de Arton, p. 71.").pack(side="right")
+        self.second_material_widget = field("Gênio Inovador: segundo material", self.second_material_var,
+                                           ("Nenhum", *self.materials))
+        self.old_second_material_widget = field("Segundo material que o item já possui", self.old_second_material_var,
+                                                ("Nenhum", *self.materials))
+        self.second_material_price_widget = field("Cotação do segundo material (T$; se exigida)", self.second_material_price_var)
         self.material_hint_var = tk.StringVar(self)
         ttk.Label(settings, textvariable=self.material_hint_var, wraplength=320,
                   style="Small.TLabel").pack(anchor="w", pady=(3, 0))
         field("Lancinante: efeito escolhido no crítico", self.lancinante_var, ("+10", "Multiplicar bônus"))
-        ttk.Checkbutton(settings, text=self.immunity_label,
-                        variable=self.red_matter_var).pack(anchor="w", pady=(10, 0))
         field("Dano final manual (opcional; substitui os passos)", self.damage_var)
         ttk.Label(settings, text="Use o dano manual para casos fora da tabela de passos. "
                   "O tamanho altera o dano; ajuste o preço-base se necessário.", wraplength=320,
                   style="Small.TLabel").pack(anchor="w", pady=(4, 8))
         self.build_extra_fields(settings, field)
+        # Compra continua usando o orçamento de mercado. Fabricação tem um perfil próprio.
+        self.genius_week_var = tk.BooleanVar(self, False)
+        self.fabricator_host = ttk.Frame(settings, height=450)
+        self.fabricator_host.pack_propagate(False)
+        from fabrication_ui import CreatorPanel
+        self.creator_panel = CreatorPanel(self.fabricator_host, app, self.schedule_refresh,
+                                          scope='weapon' if self.design_type is WeaponDesign else 'armor')
+        self.creator_panel.pack(fill="both", expand=True)
+        self.fabricate_var.trace_add("write", self.schedule_refresh)
+        self.genius_week_var.trace_add("write", self.schedule_refresh)
+        self.fabrication_var = tk.StringVar(self)
+        ttk.Label(settings, textvariable=self.fabrication_var, wraplength=320).pack(anchor="w", pady=8)
 
         search_row = ttk.Frame(catalog_panel)
         search_row.pack(fill="x", pady=(0, 8))
@@ -175,17 +211,41 @@ class WeaponWorkshop(ttk.Frame):
                 self.rows.append((kind, name, entry, row, selector, reason))
                 self.catalog_layout.append((kind, name, row, depth, parent))
         self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.info.hide())
+        self.innovation_vars, self.innovation_controls = {}, {}
+        self.old_innovations_var=tk.StringVar(self,"0")
+        if self.design_type is WeaponDesign:
+            from innovation_data import INNOVATIONS
+            tab=ttk.Frame(self.notebook)
+            self.notebook.add(tab,text="Distinções")
+            content=app.create_scrollable_panel(tab,padx=8,pady=8)
+            ttk.Label(content,text="Mestre de Armearia · Inovações",style="Section.TLabel").pack(anchor="w",pady=(0,8))
+            ttk.Label(content,text="Até quatro inovações, em uma progressão própria de preço e CD. Não têm valor comercial e dependem do criador.",wraplength=420).pack(anchor="w",pady=(0,8))
+            for name,entry in INNOVATIONS.items():
+                row=ttk.Frame(content)
+                row.pack(fill="x",pady=4)
+                var=self.innovation_vars[name]=tk.BooleanVar(self,False)
+                button=ttk.Checkbutton(row,text=name,variable=var)
+                button.pack(side="left",fill="x",expand=True)
+                info_button(row,self.forge_info,name,entry['description']+" Deuses de Arton, p. 110–111.").pack(side="right")
+                reason=ttk.Label(content,style="Small.TLabel",wraplength=420)
+                reason.pack(anchor="w")
+                self.innovation_controls[name]=(button,reason)
+                var.trace_add('write',self.schedule_refresh)
+            field("Inovações que o item já possui",self.old_innovations_var,tuple(range(5)))
+            self.old_innovations_var.trace_add('write',self.schedule_refresh)
         # O resumo e a ação continuam acessíveis mesmo quando as listas são longas.
         footer = ttk.Frame(self, padding=(0, 8, 0, 0))
-        footer.pack(fill="x")
+        footer.pack(side='bottom', fill="x", before=self.body)
+        footer_details = ttk.Frame(footer)
+        footer_details.pack(fill='x')
         self.summary_var = tk.StringVar(self)
         self.details_var = tk.StringVar(self)
         self.error_var = tk.StringVar(self)
-        self.summary_label = ttk.Label(footer, textvariable=self.summary_var, style="Section.TLabel", wraplength=1100)
+        self.summary_label = ttk.Label(footer_details, textvariable=self.summary_var, style="Section.TLabel", wraplength=1100)
         self.summary_label.pack(anchor="w")
-        self.details_label = ttk.Label(footer, textvariable=self.details_var, wraplength=1100)
+        self.details_label = ttk.Label(footer_details, textvariable=self.details_var, wraplength=1100)
         self.details_label.pack(anchor="w", pady=(3, 0))
-        self.error_label = ttk.Label(footer, textvariable=self.error_var, foreground="#b3261e", wraplength=1100)
+        self.error_label = ttk.Label(footer_details, textvariable=self.error_var, foreground="#b3261e", wraplength=1100)
         self.error_label.pack(anchor="w", pady=(3, 0))
         self.generate_button = ttk.Button(footer, text="Gerar macro de arma", style="Primary.TButton",
                                           command=self.generate)
@@ -200,6 +260,7 @@ class WeaponWorkshop(ttk.Frame):
                      self.base_price_var, self.material_price_var, self.damage_var, self.owned_var,
                      self.old_improvements_var, self.old_enchantments_var, self.old_material_var,
                      self.material_var, self.lancinante_var, self.red_matter_var, self.search_var,
+                     self.genius_var, self.second_material_var, self.second_material_price_var, self.old_second_material_var,
                      *self.improvement_vars.values(), *self.enchantment_vars.values())
         for variable in variables:
             variable.trace_add("write", self.schedule_refresh)
@@ -210,6 +271,7 @@ class WeaponWorkshop(ttk.Frame):
 
     def _resize_footer(self, event):
         if event.widget == self:
+            self.intro_label.configure(wraplength=max(240,event.width-36))
             for label in (self.summary_label, self.details_label, self.error_label, self.inventory_status_label):
                 label.configure(wraplength=max(240, event.width - 36))
 
@@ -301,7 +363,13 @@ class WeaponWorkshop(ttk.Frame):
             base_price_override=money(self.base_price_var.get()),
             material_price_override=money(self.material_price_var.get()) if self.material_price_var.get().strip() else None,
             damage_override=self.damage_var.get().strip(), lancinante_mode=self.lancinante_var.get(),
-            red_matter_immune=self.red_matter_var.get(), **self.extra_design_fields())
+            red_matter_immune=self.red_matter_var.get(), genius_innovator=self.genius_var.get(),
+            second_material=self.second_material_var.get() if self.genius_var.get() and self.second_material_var.get() != "Nenhum" else "",
+            second_material_price_override=money(self.second_material_price_var.get()) if self.genius_var.get() and self.second_material_price_var.get().strip() else None,
+            existing_second_material=self.old_second_material_var.get() if owned and self.genius_var.get() and self.old_second_material_var.get() != "Nenhum" else "",
+            innovations=tuple(n for n,v in self.innovation_vars.items() if v.get()),
+            existing_innovations=int(self.old_innovations_var.get()) if owned else 0,
+            **self.extra_design_fields())
 
     def refresh(self):
         if self._update_job is not None:
@@ -309,9 +377,42 @@ class WeaponWorkshop(ttk.Frame):
             self._update_job = None
         query = search_key(self.search_var.get())
         weapon = self.items[self.weapon_var.get()]
+        if self.fabricate_var.get():
+            self.fabricator_host.pack(fill="x", pady=4)
+        else:
+            self.fabricator_host.pack_forget()
+        self.fabrication_quote = None
+        self.fabrication_var.set("")
+        self.forge_cards.set_mode(self.fabricate_var.get())
+        self.forge_cards.clear()
+        from forge_ui import set_visible
+        for label in ('Quantas melhorias ela já possui? (inclua material)', self.old_enchantments_label,
+                      'Material especial que ela já possui'):
+            set_visible(self.field_rows[label], self.owned_var.get())
+        for label in ('Gênio Inovador: segundo material', 'Cotação do segundo material (T$; se exigida)'):
+            set_visible(self.field_rows[label], self.genius_var.get())
+        set_visible(self.field_rows['Segundo material que o item já possui'], self.owned_var.get() and self.genius_var.get())
+        set_visible(self.field_rows['Lancinante: efeito escolhido no crítico'],
+                    any(v.get() for n,v in self.enchantment_vars.items() if n.startswith('Lancinante')))
+        if 'Inovações que o item já possui' in self.field_rows:
+            set_visible(self.field_rows['Inovações que o item já possui'],
+                        self.owned_var.get() and any(v.get() for v in self.innovation_vars.values()))
+        self.second_material_widget.configure(state="readonly" if self.genius_var.get() else "disabled")
+        self.old_second_material_widget.configure(state="readonly" if self.genius_var.get() and self.owned_var.get() else "disabled")
+        self.second_material_price_widget.configure(state="normal" if self.genius_var.get() else "disabled")
         self._clear_unavailable_options(weapon)
         improvements = tuple(name for name, var in self.improvement_vars.items() if var.get())
         enchantments = tuple(name for name, var in self.enchantment_vars.items() if var.get())
+        if self.innovation_controls:
+            from innovation_data import innovation_reason
+            selected=tuple(n for n,v in self.innovation_vars.items() if v.get())
+            firearm=weapon.get('category')=='Armas de fogo' or 'híbrida' in weapon.get('description','') and 'fogo' in weapon.get('description','')
+            for name,(control,hint) in self.innovation_controls.items():
+                reason=innovation_reason(name,selected,improvements,firearm=firearm)
+                if not reason and name not in selected and len(selected)>=4:
+                    reason='Limite de quatro inovações atingido.'
+                control.configure(state='normal' if name in selected or not reason else 'disabled')
+                hint.configure(text=reason)
         for kind, name, entry, row, selector, reason_widget in self.rows:
             reason = (self.compatibility(weapon, entry, kind, self.construction_var.get())
                       or prerequisite_reason(entry, kind, improvements, enchantments, self.material_var.get()))
@@ -322,7 +423,8 @@ class WeaponWorkshop(ttk.Frame):
                     opposite = self.incompatible_pairs.get(name)
                     if opposite in improvements:
                         reason = f"Incompatível com {opposite}."
-                    elif len(improvements) + bool(self.material_var.get()) >= 4:
+                    elif (len(improvements) + bool(self.material_var.get()) + (self.genius_var.get() and self.second_material_var.get() != "Nenhum")
+                          >= (5 if self.genius_var.get() else 4)):
                         reason = "Limite de quatro melhorias atingido."
                 elif kind == "enchantment":
                     if name.startswith("Lancinante") and any(n.startswith("Lancinante") for n in enchantments):
@@ -336,7 +438,7 @@ class WeaponWorkshop(ttk.Frame):
             reason_widget.configure(text=reason)
         self._filter_catalog(query)
         for index, (title, kind) in enumerate(self.tab_titles):
-            count = (bool(self.material_var.get()) if kind == "material" else
+            count = ((int(bool(self.material_var.get())) + int(self.genius_var.get() and self.second_material_var.get() != 'Nenhum')) if kind == "material" else
                      (len(improvements) if kind == "improvement" else self.enchantment_count(enchantments)))
             self.notebook.tab(index, text=f"{title} ({count})")
         for widget in (self.old_improvements_widget, self.old_enchantments_widget, self.old_material_widget):
@@ -353,7 +455,7 @@ class WeaponWorkshop(ttk.Frame):
                 self.material_hint_var.set(f"Exige {self.material_requirement(selected_material)}. "
                                            "Informe a cotação total das peças; não há preço publicado em T$.")
         else:
-            self.material_hint_var.set("Só um material especial. O material ocupa uma das quatro melhorias.")
+            self.material_hint_var.set("Material ocupa uma melhoria. Gênio Inovador permite dois materiais e uma melhoria extra gratuita.")
         self.material_quote_widget.configure(state="normal" if rare else "disabled")
         self.result_profile = None
         quote = None
@@ -363,23 +465,52 @@ class WeaponWorkshop(ttk.Frame):
             self.summary_var.set(f"Preço final: {format_money(quote.total_price)}  ·  "
                                  f"A pagar agora: {format_money(quote.due_now)}")
             self.details_var.set(
-                f"Base: {format_money(quote.base_price)} · Melhorias {quote.improvement_count}/4: "
+                f"Base: {format_money(quote.base_price)} · Melhorias {quote.improvement_count}/{5 if self.genius_var.get() else 4}: "
                 f"{format_money(quote.improvement_price)} · Material: {format_money(quote.material_price)} · "
                 f"Encantos {quote.enchantment_count}/3: {format_money(quote.enchantment_price)}\n"
                 f"A pagar em melhorias: {format_money(quote.improvement_due)}; "
                 f"encantos: {format_money(quote.enchantment_due)}; material: {format_money(quote.material_due)}. "
-                f"CD de melhorias +{quote.improvement_dc}; CD de encantamentos +{quote.enchantment_dc}.")
+                + (f"CD de melhorias +{quote.improvement_dc}; CD de encantamentos +{quote.enchantment_dc}." if self.fabricate_var.get() else ''))
             profile = self.build_profile(design)
             self.result_profile = profile
+            stats, effects = self.purchase_details(design, profile, weapon)
+            if self.fabricate_var.get():
+                from fabrication import equipment_fabrication
+                self.fabrication_quote = equipment_fabrication(design, weapon, quote,
+                    self.creator_panel.get_creator(), genius_week=self.genius_week_var.get())
+                self.forge_cards.show_quote(self.fabrication_quote)
+                self.forge_cards.set_characteristics(stats, effects,
+                    stats_hint='Bônus do item; acrescente os valores da ficha ao usar.')
+                self.summary_var.set(f'Fabricando · A pagar agora: {format_money(self.fabrication_quote.cost)} · '
+                                     f'Valor de referência do item pronto: {format_money(quote.total_price)}')
+                self.fabrication_var.set('\n'.join(self.fabrication_quote.notes))
+            else:
+                self.forge_cards.show_purchase(None if quote.innovation_count else quote.due_now, stats, effects,
+                    price_hint=('Inovações sem valor comercial' if quote.innovation_count else
+                                f'A pagar pelas alterações · Item completo: {format_money(quote.total_price)}' if design.owned else 'Item pronto · Valor por unidade'),
+                    stats_hint='Bônus do item; acrescente os valores da ficha ao usar.')
+            if quote.innovation_count:
+                self.details_var.set(self.details_var.get()+f'\nInovações {quote.innovation_count}/4: {format_money(quote.innovation_price)}'+
+                    (f' · CD +{quote.innovation_dc}.' if self.fabricate_var.get() else '.')+' Sem valor comercial; valor de referência do projeto.')
+                if not self.fabricate_var.get():
+                    self.summary_var.set('Inovações sem valor comercial · Selecione Fabricando para orçar o projeto.')
             self.error_var.set(self.profile_summary(profile))
             self.error_label.configure(foreground="#174a75")
         except (ValueError, KeyError) as error:
+            self.result_profile = None
+            self.forge_cards.clear()
             self.error_var.set(str(error))
             self.error_label.configure(foreground="#b3261e")
-            # Não deixa valores de uma combinação anterior parecerem válidos.
-            if quote is None:
-                self.summary_var.set("Confira a configuração da arma.")
-                self.details_var.set("")
+            # Um erro de fabricação também deve limpar os valores de compra anteriores.
+            self.summary_var.set("Confira a configuração do item.")
+            self.details_var.set("")
+        for label in (self.summary_label, self.details_label, self.error_label):
+            label.pack_forget()
+        if not self.fabricate_var.get():
+            self.summary_label.pack(anchor='w')
+            self.details_label.pack(anchor='w', pady=(3,0))
+        if not self.fabricate_var.get() or self.result_profile is None:
+            self.error_label.pack(anchor='w', pady=(3,0))
         self.update_actions()
 
     def generate(self):
@@ -390,12 +521,22 @@ class WeaponWorkshop(ttk.Frame):
 
     def add_to_inventory(self):
         self.refresh()
-        if self.result_profile is None:
+        if self.result_profile is None or (not self.fabricate_var.get() and self.get_design().innovations):
             return
         try:
             design = self.get_design()
+            quote = self.quote_design(design)
+            _, effects = self.purchase_details(design, self.result_profile, self.items[design.weapon_name])
+            profile = dict(self.result_profile, description=effects,
+                           acquisition='fabrication' if self.fabricate_var.get() else 'purchase')
+            if self.fabricate_var.get() and self.fabrication_quote is not None:
+                from dataclasses import replace
+                quote = replace(quote, due_now=self.fabrication_quote.cost)
+                profile = dict(profile, description=profile["description"] + "\nFabricação: " + self.fabrication_quote.summary())
+            else:
+                profile = dict(profile, description=profile['description']+'\nComprando · Preço de compra: '+format_money(quote.due_now))
             item = self.app.add_custom_to_inventory(design, self.items[design.weapon_name],
-                                                    self.quote_design(design), self.result_profile)
+                                                    quote, profile)
             self.inventory_status_var.set(f"{item['name']} adicionado ao SHOPING. Inventário salvo.")
             self.inventory_status_label.configure(foreground="#174a75")
         except (OSError, ValueError) as error:
@@ -425,7 +566,44 @@ class WeaponWorkshop(ttk.Frame):
     def update_actions(self):
         enabled = self.result_profile is not None and self.can_generate(self.result_profile)
         self.generate_button.configure(state="normal" if enabled else "disabled")
-        self.inventory_button.configure(state="normal" if self.result_profile is not None else "disabled")
+        purchasable = self.fabricate_var.get() or not any(v.get() for v in self.innovation_vars.values())
+        self.inventory_button.configure(state="normal" if self.result_profile is not None and purchasable else "disabled")
+
+    def purchase_details(self, design, profile, item):
+        if 'defense_bonus' in profile:
+            stats = f"Defesa +{profile['defense_bonus']} · Penalidade {profile['armor_penalty']}"
+            rd = '; '.join(f'RD {v}'+('' if k == 'geral' else '/'+k) for k,v in profile['rd'].items())
+            stats += '\n' + (rd or 'Sem redução de dano')
+            stats += '\n' + '; '.join(profile['bonuses']) if profile['bonuses'] else ''
+            if profile.get('can_attack'):
+                stats += '\nEscudo: ' + self.weapon_purchase_stats(profile)
+        else:
+            stats = self.weapon_purchase_stats(profile)
+        blocks = ['Lembretes de uso: '+profile['description']] if profile['description'] else []
+        for names, catalog in ((design.improvements, self.improvements),
+                               ((design.material, design.second_material), self.materials),
+                               (design.enchantments, self.enchantments)):
+            blocks.extend(name+': '+catalog[name]['description'] for name in names if name)
+        if design.innovations:
+            from innovation_data import INNOVATIONS
+            blocks.extend(name+': '+INNOVATIONS[name]['description'] for name in design.innovations)
+        if item.get('description'):
+            blocks.append('Item-base: '+item['description'])
+        return stats, '\n\n'.join(filter(None, blocks))
+
+    @staticmethod
+    def weapon_purchase_stats(profile):
+        damage = profile['damage'] or '—'
+        flat = profile['flat_damage']
+        if flat:
+            damage += (' ' if str(flat).startswith('-') else ' + ') + str(flat)
+        if profile['extras']:
+            damage += ' + ' + ' + '.join(profile['extras'])
+        attack = str(profile['attack_bonus'] or '0')
+        if not attack.startswith(('+','-')):
+            attack = '+'+attack
+        return (f'Dano: {damage}\nAcerto: {attack} · Crítico: {profile["threat"] or "20"}/x{profile["critical_multiplier"]}'
+                f'\nTipo(s): {profile["damage_type"] or "—"}')
 
     @staticmethod
     def profile_summary(profile):
@@ -436,6 +614,7 @@ class WeaponWorkshop(ttk.Frame):
                 + "A descrição da macro inclui apenas RD ignorada e ativações por PM.")
 
     def destroy(self):
+        self.forge_info.hide()
         if self._update_job is not None:
             self.after_cancel(self._update_job)
         self.info.hide()

@@ -1,4 +1,4 @@
-# Dados extraídos de Compilado-de Itens_Tormenta20.xlsx
+# Dados extraídos de livros oficias
 # Gerado por tools/import_crafting_catalog.py.
 CRAFTING_DATA = {'Melhorias': [{'name': 'Ajustada',
                 'application': 'Armaduras e escudos',

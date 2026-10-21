@@ -10,17 +10,20 @@ from core.ui import configure_style
 from macro_app import MacroBuilderApp
 from token_workspace import TokenWorkspace
 from ui_theme import set_responsive_window_geometry
+from home_screen import HomeScreen
+from interface_settings import InterfaceSettings, default_settings_path
 
 APP_NAME = 'Macro x Token'
 DISPLAY_NAME = 'Macro Generator x TokenForge'
 RELEASE_NOTES = (
-    'Adicionado gerenciamento de inventário com o SHOPING.\n\n'
-    'Criação de armas, armaduras e escudos com melhorias, materiais e encantamentos.'
+    'Tela inicial com vila em pixel art, menu simples e efeitos opcionais.\n\n'
+    'Boticário Arcano: poções, óleos, granadas e pergaminhos com magias e aprimoramentos dos livros.\n\n'
+    'Fabricação com Ofício, Inventor, Alquimista e habilidades de conjuradores; integração com o inventário.'
 )
 
 
 class App(TkinterDnD.Tk):
-    def __init__(self):
+    def __init__(self, *, preferences_path=None, persist_preferences=True):
         super().__init__()
         self.style = configure_style(self)
         self.title(f'{DISPLAY_NAME} {VERSAO}')
@@ -34,7 +37,7 @@ class App(TkinterDnD.Tk):
         self.header = tk.Frame(self, background='white', padx=16, pady=12)
         self.header.pack(fill='x')
         titles = tk.Frame(self.header, background='white')
-        titles.pack(anchor='w')
+        titles.pack(anchor='center')
         self.title_buttons = {}
         for key, label in (('macro', 'Macro Generator'), ('token', 'TokenForge')):
             if key == 'token':
@@ -46,7 +49,7 @@ class App(TkinterDnD.Tk):
             button.pack(side='left', anchor='s')
             self.title_buttons[key] = button
         metadata = ttk.Frame(self.header)
-        metadata.pack(anchor='w', pady=(4, 0))
+        metadata.pack(anchor='center', pady=(4, 0))
         ttk.Label(metadata, text=VERSAO, style='Muted.TLabel').pack(side='left')
         self.info_button = tk.Button(metadata, text='ⓘ', font=('Segoe UI', 12),
                                     fg='#315ee7', bg='white', activebackground='#edf1f9',
@@ -54,8 +57,14 @@ class App(TkinterDnD.Tk):
                                     command=self.show_release_notes)
         self.info_button.pack(side='left', padx=8)
         self.info_button.bind('<Enter>', self.show_release_notes)
+        self.home_button = tk.Button(metadata,text='⌂ Início',font=('Segoe UI',10,'bold'),
+            fg='#315ee7',bg='white',activebackground='#edf1f9',relief='flat',bd=0,
+            cursor='hand2',command=lambda: self.show_tool('home'))
+        self.home_button.pack(side='left',padx=(12,0))
         self.content = ttk.Frame(self)
         self.content.pack(fill='both', expand=True)
+        preferences = InterfaceSettings((preferences_path or default_settings_path()) if persist_preferences else None)
+        self.home = HomeScreen(self.content,self.show_tool,preferences)
         self.macro_host = ttk.Frame(self.content)
         self.macro = MacroBuilderApp(self, self.macro_host)
         self.token_workspace = TokenWorkspace(self.content)
@@ -65,8 +74,10 @@ class App(TkinterDnD.Tk):
         self.armor_workshop = None
         self.shopping_host = ttk.Frame(self.content)
         self.shopping_workshop = None
+        self.apothecary_host = ttk.Frame(self.content)
+        self.apothecary_workshop = None
         self.header.bind('<Configure>', self._resize_header)
-        self.show_tool('macro')
+        self.show_tool('home')
 
     def _resize_header(self, event):
         self._style_titles(compact=event.width < 800)
@@ -75,20 +86,22 @@ class App(TkinterDnD.Tk):
         if compact is None:
             compact = self.winfo_width() < 800
         for key, button in self.title_buttons.items():
-            selected = key == self.active_tool or (key == 'macro' and self.active_tool in ('weapons', 'armor', 'shopping'))
+            selected = key == self.active_tool or (key == 'macro' and self.active_tool in ('weapons', 'armor', 'shopping', 'apothecary'))
             size = (20 if selected else 15) if compact else (26 if selected else 19)
             button.configure(font=('Segoe UI', size, 'bold' if selected else 'normal'),
                              fg='#315ee7' if selected else '#8490a3',
                              activeforeground='#254bc3' if selected else '#536681')
 
     def show_tool(self, tool):
-        if tool not in ('macro', 'token', 'weapons', 'armor', 'shopping'):
+        if tool not in ('home', 'macro', 'token', 'weapons', 'armor', 'shopping', 'apothecary'):
             raise ValueError('Ferramenta desconhecida')
+        self.home.pack_forget()
         self.macro_host.pack_forget()
         self.token_workspace.pack_forget()
         self.weapon_host.pack_forget()
         self.armor_host.pack_forget()
         self.shopping_host.pack_forget()
+        self.apothecary_host.pack_forget()
         self.active_tool = tool
         if tool == 'weapons' and self.weapon_workshop is None:
             from weapon_workshop import WeaponWorkshop
@@ -109,9 +122,14 @@ class App(TkinterDnD.Tk):
             self.shopping_workshop.refresh()
             if self.macro.get_inventory().lines:
                 self.shopping_workshop.notebook.select(1)
-        target = {'macro': self.macro_host, 'token': self.token_workspace,
+        if tool == 'apothecary' and self.apothecary_workshop is None:
+            from apothecary_ui import ApothecaryWorkshop
+            self.apothecary_workshop = ApothecaryWorkshop(self.apothecary_host, self.macro,
+                                                        lambda: self.show_tool('macro'))
+            self.apothecary_workshop.pack(fill='both', expand=True)
+        target = {'home': self.home, 'macro': self.macro_host, 'token': self.token_workspace,
                   'weapons': self.weapon_host, 'armor': self.armor_host,
-                  'shopping': self.shopping_host}[tool]
+                  'shopping': self.shopping_host, 'apothecary': self.apothecary_host}[tool]
         target.pack(fill='both', expand=True)
         self._style_titles()
         if tool == 'macro':

@@ -8,7 +8,7 @@ USER_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'TokenForge'
 
 
 def border_paths():
-    """User files override portable files, which override bundled resources."""
+    """Bordas do usuário têm prioridade sobre as portáteis e as incluídas no programa."""
     found = {}
     for folder in (ROOT / 'borders', APP_DIR / 'borders', USER_DIR / 'borders'):
         if folder.is_dir():

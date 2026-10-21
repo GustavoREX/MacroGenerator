@@ -2,7 +2,7 @@
 from pathlib import Path
 import queue
 import threading
-from tkinter import filedialog, colorchooser, messagebox
+from tkinter import TclError, filedialog, colorchooser, messagebox
 from PIL import Image
 from core.rendering import read_image
 
@@ -15,7 +15,7 @@ def enable_dragdrop(widget, callback):
         from tkinterdnd2 import DND_FILES
         widget.drop_target_register(DND_FILES)
         widget.dnd_bind('<<Drop>>', callback)
-    except (AttributeError, RuntimeError):
+    except (AttributeError, RuntimeError, TclError):
         pass
 
 
@@ -69,12 +69,13 @@ def auto_remove_bg(obj):
             results.put((None, str(error)))
 
     def poll():
+        obj._ai_poll_job = None
         if not obj.winfo_exists():
             return
         try:
             image, error = results.get_nowait()
         except queue.Empty:
-            obj.after(100, poll)
+            obj._ai_poll_job = obj.after(100, poll)
             return
         obj.ai_busy = False
         obj.ai_button.configure(state='normal')
@@ -90,7 +91,7 @@ def auto_remove_bg(obj):
             obj.set_status('Resultado descartado: outra imagem foi carregada ou restaurada.')
 
     threading.Thread(target=work, daemon=True).start()
-    obj.after(100, poll)
+    obj._ai_poll_job = obj.after(100, poll)
 
 
 def restore_image(obj):

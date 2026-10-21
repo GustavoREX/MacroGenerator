@@ -1,4 +1,4 @@
-'''Dois modos do Forge, um faz tokens com bordinhas o outro iria editar imagens... apenas o dos tokens esa funcionando completamente.'''
+"""Editor de imagens com sobreposição, remoção de fundo e exportação em PNG."""
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import ttkbootstrap as tb
@@ -12,7 +12,7 @@ class EditorMode(ImageMode):
     def __init__(self, master):
         super().__init__(master)
         self.overlay_img = None
-        self.ov_x = self.ov_y = 0.0  # normalized against original image width/height
+        self.ov_x = self.ov_y = 0.0  # Normalizados pela largura e altura da imagem original.
         self.overlay_zoom = tk.DoubleVar(value=.35)
         self.square = tk.BooleanVar(value=True)
         self.drag_start = None
@@ -66,13 +66,13 @@ class EditorMode(ImageMode):
                 self.overlay_img = read_image(path)
                 self.ov_x = self.ov_y = 0
                 self.refresh_preview()
-            except (OSError, ValueError) as error:
+            except (OSError, ValueError, Image.DecompressionBombError) as error:
                 messagebox.showerror('Overlay inválido', str(error), parent=self)
 
     def make_image(self, size):
         if self.source_img is None:
             return None
-        # Work at requested resolution for both preview and output.
+        # Usa a resolução solicitada tanto na prévia quanto na exportação.
         source = self.source_img
         ratio = size / max(source.size)
         dimensions = (max(1, round(source.width * ratio)), max(1, round(source.height * ratio)))

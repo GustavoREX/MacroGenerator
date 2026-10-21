@@ -27,20 +27,37 @@ class ScrollFrame(ttk.Frame):
         self.window = self.canvas.create_window(0, 0, window=self.content, anchor='nw')
         self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfigure(self.window, width=e.width))
         self.content.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self._wheel_tag = f'TokenScroll:{self}'
+        for sequence in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self.bind_class(self._wheel_tag, sequence, self._wheel)
         self.bind('<Map>', self._bind_wheel, add='+')
 
     def _bind_wheel(self, _event=None):
         def attach(widget):
-            widget.bind('<MouseWheel>', self._wheel, add='+')
+            if isinstance(widget, (tk.Text, tk.Listbox, ttk.Treeview, ttk.Combobox, ttk.Spinbox, ttk.Scale)):
+                return
+            tags = widget.bindtags()
+            if self._wheel_tag not in tags:
+                widget.bindtags((tags[0], self._wheel_tag, *tags[1:]))
             for child in widget.winfo_children():
                 attach(child)
         attach(self.content)
-        self.canvas.bind('<MouseWheel>', self._wheel)
+        attach(self.canvas)
 
     def _wheel(self, event):
+        delta = getattr(event, 'delta', 0)
+        button = getattr(event, 'num', None)
+        if button not in (4, 5) and not delta:
+            return None
+        direction = -1 if button == 4 or delta > 0 else 1
         if self.canvas.yview() != (0.0, 1.0):
-            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, 'units')
+            self.canvas.yview_scroll(direction, 'units')
         return 'break'
+
+    def destroy(self):
+        for sequence in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self.unbind_class(self._wheel_tag, sequence)
+        super().destroy()
 
 
 def responsive_buttons(parent, buttons, cell=170):
@@ -69,8 +86,10 @@ def labeled_scale(parent, title, variable, low, high, callback, digits=2):
         value.configure(text=f'{variable.get():.{digits}f}')
         callback()
     variable.trace_add('write', changed)
-    tb.Scale(parent, from_=low, to=high, variable=variable).pack(fill='x')
+    scale = tb.Scale(parent, from_=low, to=high, variable=variable)
+    scale.pack(fill='x')
     value.configure(text=f'{variable.get():.{digits}f}')
+    return scale
 
 
 class ImageMode(ttk.Frame):
@@ -81,6 +100,7 @@ class ImageMode(ttk.Frame):
         self.current_path = None
         self.image_revision = 0
         self.ai_busy = False
+        self._ai_poll_job = None
         self._preview_job = None
         self.status_var = tk.StringVar(value='Importe uma imagem ou arraste um arquivo para a prévia.')
 
@@ -96,6 +116,7 @@ class ImageMode(ttk.Frame):
         self.draw_preview()
 
     def destroy(self):
-        if self._preview_job is not None:
-            self.after_cancel(self._preview_job)
+        for job in (self._preview_job, self._ai_poll_job):
+            if job is not None:
+                self.after_cancel(job)
         super().destroy()

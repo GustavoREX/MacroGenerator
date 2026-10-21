@@ -21,6 +21,23 @@ def parse_version(version: str) -> tuple[int, ...] | None:
     return tuple(int(part) for part in version.split("."))
 
 
+def validate_download(asset, downloaded, actual_hash):
+    """Confere tamanho e assinatura disponíveis antes de aceitar o executável."""
+    expected_size = asset.get('size')
+    if expected_size is not None:
+        if isinstance(expected_size, bool) or not isinstance(expected_size, int) or expected_size < 0:
+            raise ValueError('O tamanho informado para a atualização é inválido.')
+        if downloaded != expected_size:
+            raise ValueError('O download do arquivo ficou incompleto.')
+    expected_digest = asset.get('digest') or ''
+    if not isinstance(expected_digest, str):
+        raise ValueError('A assinatura do arquivo de atualização é inválida.')
+    if expected_digest.startswith('sha256:'):
+        expected_hash = expected_digest.removeprefix('sha256:').lower()
+        if actual_hash.lower() != expected_hash:
+            raise ValueError('A verificação do arquivo baixado falhou.')
+
+
 def get_update_directory() -> str:
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
@@ -50,7 +67,11 @@ def update_frozen_app() -> bool:
     events = queue.Queue()
     executable_path = os.path.abspath(sys.executable)
     executable_folder = os.path.dirname(executable_path)
-    update_directory = get_update_directory()
+    try:
+        update_directory = get_update_directory()
+    except OSError:
+        # A falta de acesso ao cache do atualizador não impede abrir o programa.
+        return False
 
     downloaded_file = None
     install_requested = False
@@ -158,22 +179,7 @@ def update_frozen_app() -> bool:
                     downloaded += len(chunk)
                     events.put(("progress", downloaded))
 
-            expected_digest = asset.get("digest", "")
-
-            if expected_digest.startswith("sha256:"):
-                expected_hash = expected_digest.removeprefix(
-                    "sha256:"
-                ).lower()
-
-                if digest.hexdigest().lower() != expected_hash:
-                    raise ValueError(
-                        "A verificação do arquivo baixado falhou."
-                    )
-
-            elif downloaded != asset.get("size", downloaded):
-                raise ValueError(
-                    "O download do arquivo ficou incompleto."
-                )
+            validate_download(asset, downloaded, digest.hexdigest())
 
             events.put(
                 (
@@ -513,7 +519,7 @@ def update_frozen_app() -> bool:
 
 
 # ============================================================
-# Roll20 Macro Builder
+# Gerador de macros para Roll20
 # ============================================================
 # Gerador simples e extensível de macros de ataque para Roll20.
 #

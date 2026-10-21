@@ -1,9 +1,9 @@
-'''Yeap, esse aqui funfa 100%, o outro ta 10% feito kkkkk'''
+"""Criação de tokens com bordas, recortes e composição de camadas."""
 import math
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import ttkbootstrap as tb
-from PIL import ImageTk
+from PIL import Image, ImageTk
 from core.paths import border_paths
 from core.rendering import TokenSettings, Slice, render_token, checkerboard, read_image
 from core.shared import open_image, on_drop, enable_dragdrop, auto_remove_bg, pick_color, save_image, restore_image
@@ -17,8 +17,11 @@ class TokenMode(ImageMode):
     def __init__(self, master):
         super().__init__(master)
         self.border_img = None
+        self.imported_border_path = None
+        self._applied_border = 'Sem borda'
         self.bg_mode = tk.StringVar(value='transparent')
         self.bg_color = '#ffffff'
+        self.background_scale = tk.DoubleVar(value=100)
         self.size_var = tk.StringVar(value='512')
         self.advanced = tk.BooleanVar(value=False)
         self.img_zoom = tk.DoubleVar(value=1)
@@ -33,6 +36,7 @@ class TokenMode(ImageMode):
         self.drag_start = None
         self.preview_size = 320
         self.slice_vars = [(tk.DoubleVar(value=0), tk.DoubleVar(value=0), tk.BooleanVar(value=True)) for _ in range(4)]
+        self.slice_clip_vars = [(tk.BooleanVar(value=False), tk.DoubleVar(value=100)) for _ in range(4)]
         self.border_choice = tk.StringVar(value='Sem borda')
         self._compact = None
         self._build_ui()
@@ -128,13 +132,23 @@ class TokenMode(ImageMode):
         for value, text in (('transparent', 'Transparente'), ('solid', 'Cor sólida')):
             tb.Radiobutton(parent, text=text, value=value, variable=self.bg_mode, command=self.refresh_preview).pack(anchor='w', pady=3)
         tb.Button(parent, text='Escolher cor', command=lambda: pick_color(self)).pack(fill='x', pady=8)
+        self.background_scale_control = labeled_scale(parent, 'Diâmetro do fundo (% do círculo)',
+                self.background_scale, 20, 100, self.refresh_preview, 0)
+        self.bg_mode.trace_add('write', lambda *_: self.background_scale_control.configure(
+            state='normal' if self.bg_mode.get() == 'solid' else 'disabled'))
+        self.background_scale_control.configure(state='disabled')
+        ttk.Label(parent, text='A cor fica só no círculo da borda, mesmo em Quadrado livre. '
+                  'Sem borda, acompanha o diâmetro do recorte circular.',
+                  wraplength=295, style='Muted.TLabel').pack(fill='x', pady=8)
 
     def _layer_controls(self, parent):
         ttk.Label(parent, text='Borda completa → imagem → 4 fatias', style='Subheading.TLabel', wraplength=290).pack(anchor='w')
-        ttk.Label(parent, text='Ative o modo avançado. Os controles removem parte de cada fatia superior sem apagar a borda inferior.',
+        ttk.Label(parent, text='No modo avançado, ajuste a borda e o recorte da imagem separadamente. '
+                  'Para sair só por cima, use Quadrado livre e contenha a imagem nas fatias 2 e 3 (divisão em 0°).',
                   style='Muted.TLabel', wraplength=295).pack(fill='x', pady=8)
         labeled_scale(parent, 'Rotação da divisão em cruz (°)', self.rotation, 0, 90, self.refresh_preview, 0)
         self.slice_labels = []
+        self.slice_clip_controls = []
         for index, (start, end, visible) in enumerate(self.slice_vars):
             box = tb.Labelframe(parent, text=SLICE_NAMES[index], padding=10)
             box.pack(fill='x', pady=7)
@@ -146,10 +160,22 @@ class TokenMode(ImageMode):
             label = ttk.Label(box, text='Visível: 90° / 90°', style='Muted.TLabel')
             label.pack(anchor='w', pady=(6, 0))
             self.slice_labels.append(label)
+            ttk.Separator(box).pack(fill='x', pady=8)
+            clip, diameter = self.slice_clip_vars[index]
+            tb.Checkbutton(box, text='Conter imagem no círculo nesta fatia', variable=clip,
+                           command=self.refresh_preview).pack(anchor='w')
+            control = labeled_scale(box, 'Diâmetro do recorte (% da borda)', diameter, 20, 120, self.refresh_preview, 0)
+            clip.trace_add('write', lambda *_, c=clip, widget=control: widget.configure(
+                state='normal' if c.get() else 'disabled'))
+            control.configure(state='disabled')
+            self.slice_clip_controls.append(control)
+            ttk.Label(box, text='Desmarcado: a imagem fica livre. O recorte não apaga a borda.',
+                      wraplength=265, style='Muted.TLabel').pack(fill='x', pady=(5, 0))
         actions = ttk.Frame(parent)
         actions.pack(fill='x', pady=8)
         tb.Button(actions, text='Mostrar todas', command=lambda: self.set_slices(True)).pack(side='left', expand=True, fill='x')
         tb.Button(actions, text='Ocultar todas', command=lambda: self.set_slices(False)).pack(side='left', expand=True, fill='x', padx=4)
+        tb.Button(parent, text='Liberar imagem nas quatro fatias', command=self.reset_image_clips).pack(fill='x', pady=(0,8))
 
     def _export_controls(self, parent):
         ttk.Label(parent, text='PNG quadrado', style='Subheading.TLabel').pack(anchor='w')
@@ -185,6 +211,12 @@ class TokenMode(ImageMode):
                 end.set(0)
         self.refresh_preview()
 
+    def reset_image_clips(self):
+        for clip, diameter in self.slice_clip_vars:
+            clip.set(False)
+            diameter.set(100)
+        self.refresh_preview()
+
     def on_image_loaded(self):
         self.img_zoom.set(1)
         self.center_image()
@@ -200,29 +232,43 @@ class TokenMode(ImageMode):
 
     def load_borders(self):
         self.borders = border_paths()
-        self.border_combo['values'] = ['Sem borda', *self.borders]
+        imported = ['Borda importada'] if self.imported_border_path is not None else []
+        self.border_combo['values'] = ['Sem borda', *self.borders, *imported]
         if self.border_choice.get() not in self.border_combo['values']:
             self.border_choice.set('Sem borda')
+            self.border_img = None
+            self._applied_border = 'Sem borda'
+            self.refresh_preview()
 
     def import_border(self):
         path = filedialog.askopenfilename(parent=self, filetypes=[('Borda', '*.png *.webp')])
-        if path:
-            self._read_border(path)
+        if path and self._read_border(path):
+            self.imported_border_path = path
+            self.border_combo['values'] = ['Sem borda', *self.borders, 'Borda importada']
             self.border_choice.set('Borda importada')
+            self._applied_border = 'Borda importada'
 
     def _read_border(self, path):
         try:
             self.border_img = read_image(path)
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, Image.DecompressionBombError) as error:
             messagebox.showerror('Não foi possível abrir a borda', str(error), parent=self)
+            return False
         self.refresh_preview()
+        return True
 
     def apply_border(self):
         path = self.borders.get(self.border_choice.get())
+        if self.border_choice.get() == 'Borda importada':
+            path = self.imported_border_path
         if path:
-            self._read_border(path)
+            if self._read_border(path):
+                self._applied_border = self.border_choice.get()
+            else:
+                self.border_choice.set(self._applied_border)
         else:
             self.border_img = None
+            self._applied_border = 'Sem borda'
             self.refresh_preview()
 
     def settings(self):
@@ -230,7 +276,9 @@ class TokenMode(ImageMode):
             border_zoom=self.border_zoom.get(), offset_x=self.offset_x, offset_y=self.offset_y,
             crop=self.crop_mode.get(), crop_scale=self.crop_scale.get(), fit=self.fit_mode.get(),
             trim_transparent=self.trim_transparent.get(), background=self.bg_color if self.bg_mode.get() == 'solid' else None,
-            rotation=self.rotation.get(), slices=[Slice(a.get(), b.get(), v.get()) for a, b, v in self.slice_vars])
+            rotation=self.rotation.get(), background_scale=self.background_scale.get()/100,
+            slices=[Slice(a.get(), b.get(), v.get(), clip.get(), diameter.get()/100)
+                    for (a,b,v),(clip,diameter) in zip(self.slice_vars,self.slice_clip_vars)])
 
     def make_token(self, size):
         return render_token(self.source_img, self.border_img, size, self.settings())
@@ -255,6 +303,12 @@ class TokenMode(ImageMode):
                 self.canvas.create_line(cx, cy, cx+math.sin(angle)*radius, cy-math.cos(angle)*radius, fill=color, dash=(3, 5))
                 middle = angle + math.pi / 4
                 self.canvas.create_text(cx+math.sin(middle)*(radius+10), cy-math.cos(middle)*(radius+10), text=str(i+1), fill=color, font=('Segoe UI', 11, 'bold'))
+                clip, diameter = self.slice_clip_vars[i]
+                if clip.get():
+                    limit = radius*diameter.get()/100
+                    self.canvas.create_arc(cx-limit,cy-limit,cx+limit,cy+limit,
+                        start=90-self.rotation.get()-(i+1)*90,extent=90,style='arc',
+                        outline=color,width=2,dash=(4,3),tags='image-crop-guide')
         if self.source_img is None:
             self.canvas.create_text(cx, cy, text='Arraste sua imagem aqui\nou use Importar imagem', fill='#354966', font=('Segoe UI', 13), justify='center')
 

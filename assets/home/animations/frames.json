@@ -1,0 +1,107 @@
+{
+  "size": 80,
+  "hotspot": [
+    40,
+    2
+  ],
+  "states": {
+    "idle": {
+      "files": [
+        "frames/idle-0.png",
+        "frames/idle-1.png",
+        "frames/idle-2.png",
+        "frames/idle-3.png"
+      ],
+      "durations_ms": [
+        367,
+        367,
+        367,
+        367
+      ]
+    },
+    "macro": {
+      "files": [
+        "frames/macro-0.png",
+        "frames/macro-1.png",
+        "frames/macro-2.png",
+        "frames/macro-3.png"
+      ],
+      "durations_ms": [
+        233,
+        200,
+        533,
+        233
+      ]
+    },
+    "token": {
+      "files": [
+        "frames/token-0.png",
+        "frames/token-1.png",
+        "frames/token-2.png",
+        "frames/token-3.png"
+      ],
+      "durations_ms": [
+        233,
+        200,
+        467,
+        233
+      ]
+    },
+    "weapons": {
+      "files": [
+        "frames/weapons-0.png",
+        "frames/weapons-1.png",
+        "frames/weapons-2.png",
+        "frames/weapons-3.png"
+      ],
+      "durations_ms": [
+        233,
+        200,
+        467,
+        233
+      ]
+    },
+    "armor": {
+      "files": [
+        "frames/armor-0.png",
+        "frames/armor-1.png",
+        "frames/armor-2.png",
+        "frames/armor-3.png"
+      ],
+      "durations_ms": [
+        267,
+        267,
+        500,
+        267
+      ]
+    },
+    "apothecary": {
+      "files": [
+        "frames/apothecary-0.png",
+        "frames/apothecary-1.png",
+        "frames/apothecary-2.png",
+        "frames/apothecary-3.png"
+      ],
+      "durations_ms": [
+        233,
+        200,
+        467,
+        233
+      ]
+    },
+    "shopping": {
+      "files": [
+        "frames/shopping-0.png",
+        "frames/shopping-1.png",
+        "frames/shopping-2.png",
+        "frames/shopping-3.png"
+      ],
+      "durations_ms": [
+        200,
+        133,
+        167,
+        133
+      ]
+    }
+  }
+}

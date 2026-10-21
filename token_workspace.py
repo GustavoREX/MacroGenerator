@@ -25,6 +25,7 @@ class TokenWorkspace(ttk.Frame):
         self.show(TokenMode if self.mode_var.get() == 'token' else EditorMode)
 
     def show(self, frame_cls):
+        self.mode_var.set('token' if frame_cls is TokenMode else 'editor')
         if self.current is not None:
             self.current.pack_forget()
         if frame_cls not in self.modes:

@@ -1,4 +1,4 @@
-# Catálogo extraído de Compilado-de Itens_Tormenta20.xlsx
+# Catálogo extraído dos livros oficias
 # Gerado por tools/import_shopping_catalog.py; preserve os textos da fonte.
 SHOPPING_DATA = {'Armas simples': [{'group': 'Corpo a Corpo — Leves',
                     'name': 'Adaga',

@@ -3,8 +3,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 from crafting_core import money, format_money
-from shopping_core import CATALOGS, decimal_text, filter_items, item_info
+from shopping_core import CATALOGS, decimal_text, filter_items, item_info, item_characteristics
 from weapon_ui import WeaponInfoPopup
+from forge_ui import QuoteCards
 
 
 CATALOG_GROUPS = {
@@ -48,13 +49,20 @@ class ShoppingWorkshop(ttk.Frame):
         ttk.Button(header, text="← Macro Generator", command=on_back).pack(side="right")
         ttk.Label(self, text="Monte suas compras e acompanhe o gasto e a carga. Passe o mouse no ⓘ para ver os detalhes.",
                   wraplength=1000).pack(anchor="w", pady=(0, 8))
+        self.item_title_var = tk.StringVar(self,'Selecione um item para ver preço e características')
+        self.item_title_label = ttk.Label(self,textvariable=self.item_title_var,style='Section.TLabel',wraplength=1000)
+        self.item_title_label.pack(anchor='w',pady=(0,4))
+        self.item_cards = QuoteCards(self,expandable=False)
+        self.item_cards.effects.configure(height=3)
+        self.item_cards.pack(fill='x',pady=(0,8))
+        self._catalog_preview_item = None
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill="both", expand=True)
         catalog_tab = ttk.Frame(self.notebook)
         inventory_tab = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(catalog_tab, text="Catálogos")
         self.notebook.add(inventory_tab, text="Meu inventário")
-        self.notebook.bind("<<NotebookTabChanged>>", lambda _e: self.info.hide())
+        self.notebook.bind("<<NotebookTabChanged>>", self._tab_changed)
 
         menu_panel = ttk.Frame(catalog_tab, width=218)
         menu_panel.pack(side="left", fill="y", padx=(0, 10))
@@ -129,14 +137,16 @@ class ShoppingWorkshop(ttk.Frame):
         self.inventory_tree.bind("<ButtonRelease-1>", self._tree_info)
         self._tooltip_key = None
 
-        form = ttk.Frame(inventory_tab)
+        inventory_controls = ttk.Frame(inventory_tab)
+        inventory_controls.pack(side='bottom',fill='x',before=tree_panel)
+        form = ttk.Frame(inventory_controls)
         form.pack(fill="x", pady=(8, 0))
         for column, (title, variable, width) in enumerate((("Quantidade", self.quantity_var, 9),
                     ("A pagar por unidade (T$)", self.price_var, 22), ("Espaços por unidade", self.spaces_var, 18))):
             ttk.Label(form, text=title).grid(row=0, column=column, sticky="w", padx=(0, 10))
             ttk.Entry(form, textvariable=variable, width=width).grid(row=1, column=column, sticky="ew", padx=(0, 10))
             form.columnconfigure(column, weight=1)
-        actions = ttk.Frame(inventory_tab)
+        actions = ttk.Frame(inventory_controls)
         actions.pack(fill="x", pady=(8, 4))
         self.apply_button = ttk.Button(actions, text="Aplicar alterações", command=self.update_selected)
         self.apply_button.pack(side="left", padx=(0, 6))
@@ -150,11 +160,11 @@ class ShoppingWorkshop(ttk.Frame):
         self.clear_button.pack(side="left", padx=(0, 6))
         self.selected_info_button = ttk.Button(actions, text="ⓘ", width=3, command=self.show_selected_info)
         self.selected_info_button.pack(side="left")
-        ttk.Label(inventory_tab, text="Deixe preço ou espaços em branco para manter a pendência. Informe 0 se não houver custo ou carga.",
+        ttk.Label(inventory_controls, text="Deixe preço ou espaços em branco para manter a pendência. Informe 0 se não houver custo ou carga.",
                   style="Small.TLabel", wraplength=1050).pack(anchor="w", pady=(4, 0))
 
         footer = ttk.Frame(self, padding=(0, 10, 0, 0))
-        footer.pack(fill="x")
+        footer.pack(side='bottom',fill="x",before=self.notebook)
         self.total_label = ttk.Label(footer, textvariable=self.total_var, style="Section.TLabel", wraplength=1100)
         self.total_label.pack(anchor="w")
         self.pending_label = ttk.Label(footer, textvariable=self.pending_var, foreground="#ae5510", wraplength=1100)
@@ -169,7 +179,7 @@ class ShoppingWorkshop(ttk.Frame):
 
     def _resize(self, event):
         if event.widget == self:
-            for label in (self.total_label, self.pending_label, self.status_label, self.selection_label):
+            for label in (self.total_label, self.pending_label, self.status_label, self.selection_label,self.item_title_label):
                 label.configure(wraplength=max(240, event.width - 40))
 
     def choose_category(self, name):
@@ -234,6 +244,8 @@ class ShoppingWorkshop(ttk.Frame):
             icon = ttk.Button(row, text="ⓘ", width=3)
             icon.grid(row=0, column=1, rowspan=2, padx=(6, 3))
             self.info.attach(icon, item_info(item))
+            for widget in (row, *row.winfo_children()):
+                widget.bind('<Enter>', lambda _, i=item: self.show_catalog_item(i), add='+')
             add = ttk.Button(row, text="+", width=3, command=lambda i=item: self.add_item(i))
             add.grid(row=0, column=2, rowspan=2)
             # Bindings do contêiner não propagam aos filhos no Tk. Apenas o
@@ -246,7 +258,14 @@ class ShoppingWorkshop(ttk.Frame):
             self.catalog_rows.append((item, row, icon, add))
         if not items:
             ttk.Label(self.catalog_list, text="Nenhum item encontrado." if self.category != "Customizados" else
-                      "Use Adicionar no inventário nos criadores de armas e armaduras.", wraplength=450).pack(anchor="w", pady=12)
+                      "Use Adicionar ao inventário nas oficinas de equipamentos ou no Boticário Arcano.", wraplength=450).pack(anchor="w", pady=12)
+        if self.notebook.index(self.notebook.select()) == 0:
+            if self.catalog_rows:
+                chosen = next((i for i,*_ in self.catalog_rows if self._catalog_preview_item and i['id']==self._catalog_preview_item['id']),self.catalog_rows[0][0])
+                self.show_catalog_item(chosen)
+            else:
+                self.item_title_var.set('Nenhum item corresponde aos filtros')
+                self.item_cards.clear()
         self.page_var.set(f"{self.page + 1} / {pages}")
         self.previous_button.configure(state="normal" if self.page else "disabled")
         self.next_button.configure(state="normal" if self.page + 1 < pages else "disabled")
@@ -301,6 +320,8 @@ class ShoppingWorkshop(ttk.Frame):
         try:
             self.inventory.add(item)
             self.refresh_inventory()
+            self.inventory_tree.selection_set(item['id'])
+            self._selected()
             self.set_status(f"{item['name']} adicionado. Inventário salvo automaticamente.")
         except (OSError, ValueError) as error:
             self.set_status(str(error), error=True)
@@ -309,18 +330,48 @@ class ShoppingWorkshop(ttk.Frame):
         selected = self.inventory_tree.selection()
         return next((row for row in self.inventory.lines if selected and row.key == selected[0]), None)
 
+    def show_item(self, item, line=None):
+        price = line.unit_price if line else money(item['price_value']) if item.get('price_value') is not None else None
+        quantity = line.quantity if line else 1
+        spaces = line.unit_spaces if line else money(item['spaces_value']) if item.get('spaces_value') is not None else None
+        stats = item_characteristics(item)+'\nEspaços / un.: '+('Pendente' if spaces is None else decimal_text(spaces))
+        hint = ('Valor completo / un.: '+format_money(money(item['full_price']))) if item.get('full_price') is not None else ''
+        effects = '\n\n'.join(filter(None,(item.get('description',''),item.get('notes',''),
+                                            'Fonte: '+item['source'] if item.get('source') else '')))
+        self.item_title_var.set(item['name'])
+        self.item_cards.show_purchase(price,stats,effects,quantity=quantity,price_hint=hint,stats_hint=item.get('group',''))
+        self.item_cards.titles[0].set('GASTO DO ITEM · TOTAL' if line else 'PREÇO DE COMPRA')
+        if price is None:
+            self.item_cards.labels[0].configure(fg='#b3261e')
+
+    def show_catalog_item(self, item):
+        self._catalog_preview_item = item
+        line = next((r for r in self.inventory.lines if r.key == item['id']),None)
+        self.show_item(item,line)
+
+    def _tab_changed(self, _event=None):
+        self.info.hide()
+        if self.notebook.index(self.notebook.select()) == 1:
+            self._selected()
+        elif self.catalog_rows:
+            self.show_catalog_item(self._catalog_preview_item or self.catalog_rows[0][0])
+
     def _selected(self, _event=None):
         row = self.selected_line()
         for button in (self.apply_button, self.minus_button, self.plus_button, self.remove_button, self.selected_info_button):
             button.configure(state="normal" if row else "disabled")
         if row:
+            self.show_item(row.item,row)
             self.quantity_var.set(str(row.quantity))
             self.price_var.set("" if row.unit_price is None else decimal_text(row.unit_price).replace(".", ","))
             self.spaces_var.set("" if row.unit_spaces is None else decimal_text(row.unit_spaces).replace(".", ","))
             self.selection_var.set(f"{row.item['name']} · {row.item['category']}" + (
                 f" · Valor completo por unidade: {row.item['price']}" if row.item.get("full_price") else ""))
         else:
-            self.selection_var.set("Adicione itens nos catálogos ou nos criadores de armas e armaduras.")
+            self.selection_var.set("Adicione itens nos catálogos, nas oficinas ou no Boticário Arcano.")
+            if self.notebook.index(self.notebook.select()) == 1:
+                self.item_title_var.set('Inventário vazio')
+                self.item_cards.clear()
 
     def update_selected(self):
         row = self.selected_line()
@@ -365,7 +416,7 @@ class ShoppingWorkshop(ttk.Frame):
             self.info.hide()
             answer = messagebox.askyesnocancel(
                 "Limpar inventário",
-                "Há armas ou armaduras customizadas salvas. Deseja removê-las também?\n\n"
+                "Há itens customizados salvos. Deseja removê-los também?\n\n"
                 "Sim: remove todos os itens e esvazia o catálogo Customizados.\n"
                 "Não: remove apenas os itens comuns, preservando os customizados.\n"
                 "Cancelar: mantém tudo como está.", parent=self)

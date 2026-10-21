@@ -71,10 +71,10 @@ def custom_item(design, base, quote, profile):
         spaces = parse_spaces(base.get("spaces", ""))
         if spaces is not None:
             reduction = sum(base_name(name) == "Discreto" for name in design.improvements)
-            reduction += base_name(design.material) == "Mitral"
+            reduction += any(base_name(m) == "Mitral" for m in (design.material, design.second_material))
             spaces = max(min(spaces, Decimal(1)), spaces - reduction)
     configuration = asdict(design)
-    selected = [*design.improvements, *([design.material] if design.material else []), *design.enchantments]
+    selected = [*design.improvements, *filter(None, (design.material, design.second_material)), *design.enchantments, *design.innovations]
     details = [f"Item-base: {base['name']}", f"Tamanho: {design.size}",
                "Configuração: " + (", ".join(selected) or "Sem modificações"),
                f"Valor completo: {format_money(quote.total_price)}",
@@ -97,6 +97,41 @@ def custom_item(design, base, quote, profile):
                               configuration=configuration, profile=profile))
     digest = sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return dict(payload, id="custom:" + digest)
+
+
+def item_characteristics(item):
+    """Dados de combate/carga de catálogos e fotografias salvas nas oficinas."""
+    profile = item.get('profile')
+    lines = []
+    if profile:
+        if 'defense_bonus' in profile:
+            lines.append(f"Defesa +{profile['defense_bonus']} · Penalidade {profile['armor_penalty']}")
+            lines.extend(f'RD {v}'+('' if k == 'geral' else '/'+k) for k,v in profile.get('rd',{}).items())
+            lines.extend(profile.get('bonuses',()))
+        if profile.get('can_attack',True):
+            damage = profile['damage'] or '—'
+            if profile.get('flat_damage'):
+                flat = str(profile['flat_damage'])
+                damage += (' ' if flat.startswith('-') else ' + ')+flat
+            if profile.get('extras'):
+                damage += ' + '+' + '.join(profile['extras'])
+            lines.extend((f'Dano: {damage}', f"Acerto adicional: {profile.get('attack_bonus') or '0'}",
+                          f"Crítico: {profile['threat']}/x{profile['critical_multiplier']}",
+                          'Tipo(s): '+(profile.get('damage_type') or '—')))
+    else:
+        for key,label in (('damage','Dano'),('critical','Crítico'),('damage_type','Tipo(s)'),
+                          ('defense','Defesa'),('penalty','Penalidade'),('range','Alcance')):
+            if item.get(key) not in (None,''):
+                lines.append(f'{label}: {item[key]}')
+        config = item.get('configuration',{})
+        if config.get('spell_id'):
+            from apothecary_core import SPELLS
+            spell = SPELLS.get(config['spell_id'])
+            if spell:
+                lines.extend((spell['name'],f"{spell['circle']}º círculo · {spell['tradition']}"))
+    if not lines:
+        lines.append(item.get('group') or item['category'])
+    return '\n'.join(lines)
 
 
 def item_info(item):
@@ -164,6 +199,8 @@ class Inventory:
                 if data["version"] != 1:
                     raise ValueError("Versão de inventário desconhecida.")
                 customs = {item["id"]: self._validate_item(item) for item in data["custom_items"]}
+                if len(customs) != len(data['custom_items']):
+                    raise ValueError('Itens customizados repetidos no arquivo.')
                 lines = tuple(InventoryLine(self._validate_item(row["item"]), valid_quantity(row["quantity"]),
                                             optional_decimal(row["unit_price"]), optional_decimal(row["unit_spaces"]))
                               for row in data["lines"])
@@ -175,12 +212,29 @@ class Inventory:
 
     @staticmethod
     def _validate_item(item):
+        if not isinstance(item, dict):
+            raise ValueError('Item de inventário inválido.')
         for field in ("id", "name", "category"):
-            if not isinstance(item[field], str) or not item[field]:
+            if not isinstance(item.get(field), str) or not item[field]:
                 raise ValueError("Item de inventário inválido.")
-        optional_decimal(item["price_value"])
-        optional_decimal(item["spaces_value"])
-        return deepcopy(item)
+        price = optional_decimal(item.get("price_value"))
+        optional_decimal(item.get("spaces_value"))
+        full_price = optional_decimal(item.get('full_price'))
+        for field in ('description', 'source', 'notes', 'group', 'price'):
+            if field in item and not isinstance(item[field], str):
+                raise ValueError(f'Campo {field} inválido no item de inventário.')
+        for field in ('profile', 'configuration'):
+            if field in item and not isinstance(item[field], dict):
+                raise ValueError(f'Campo {field} inválido no item de inventário.')
+        snapshot = deepcopy(item)
+        # Arquivos antigos podem não ter os textos usados pelo catálogo atual.
+        snapshot.setdefault('price_value', None)
+        snapshot.setdefault('spaces_value', None)
+        snapshot.setdefault('description', '')
+        snapshot.setdefault('special', price is None)
+        display_price = full_price if full_price is not None else price
+        snapshot.setdefault('price', format_money(display_price) if display_price is not None else 'Sem cotação')
+        return snapshot
 
     def _commit(self, lines, customs=None):
         if self.load_error:

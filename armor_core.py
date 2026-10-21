@@ -160,6 +160,8 @@ class ArmorDesign(WeaponDesign):
 
 
 def validate_armor_design(design):
+    if design.innovations or design.existing_innovations:
+        raise ValueError("Inovações do Mestre de Armearia não se aplicam a armaduras ou escudos.")
     if design.weapon_name not in ARMOR_ITEMS:
         raise ValueError("Escolha uma armadura ou escudo não mágico do catálogo.")
     item = ARMOR_ITEMS[design.weapon_name]
@@ -179,16 +181,21 @@ def validate_armor_design(design):
                                              design.enchantments, design.material))
             if reason:
                 raise ValueError(f"{name}: {reason}")
-    if design.material:
-        if design.material not in ARMOR_MATERIALS:
+    if design.second_material and (not design.genius_innovator or not design.material or design.second_material == design.material):
+        raise ValueError("Dois materiais diferentes exigem Gênio Inovador e um primeiro material.")
+    for material in filter(None, (design.material, design.second_material)):
+        if material not in ARMOR_MATERIALS:
             raise ValueError("Material especial inválido.")
-        reason = armor_incompatibility(item, ARMOR_MATERIALS[design.material], "material", design.construction)
+        reason = armor_incompatibility(item, ARMOR_MATERIALS[material], "material", design.construction)
         if reason:
             raise ValueError(reason)
     if design.existing_material and design.existing_material not in ARMOR_MATERIALS:
         raise ValueError("Material anterior inválido.")
-    count, enchants = len(design.improvements) + bool(design.material), armor_enchantment_count(design.enchantments)
-    if count > 4 or enchants > 3:
+    if design.existing_second_material and (design.existing_second_material not in ARMOR_MATERIALS or not design.owned
+            or not design.genius_innovator or design.existing_improvements < 2 or not design.second_material):
+        raise ValueError("Segundo material anterior exige item possuído, Gênio Inovador e duas melhorias anteriores/finais.")
+    count, enchants = len(design.improvements) + bool(design.material) + bool(design.second_material), armor_enchantment_count(design.enchantments)
+    if count > (5 if design.genius_innovator else 4) or enchants > 3:
         raise ValueError("O item compartilha o limite de 4 melhorias e 3 encantamentos entre defesa e ataque.")
     if not (0 <= design.existing_improvements <= count and 0 <= design.existing_enchantments <= enchants):
         raise ValueError("A configuração final deve incluir todas as melhorias e encantamentos anteriores.")
@@ -207,8 +214,9 @@ def validate_armor_design(design):
 def quote_armor(design):
     item, count, enchants = validate_armor_design(design)
     base = money(design.base_price_override if design.base_price_override is not None else item["price"])
-    material = armor_material_price(design.material, item, design.material_price_override)
-    return quote_from_prices(design, base, material, count, enchants)
+    primary = armor_material_price(design.material, item, design.material_price_override)
+    material = primary + armor_material_price(design.second_material, item, design.second_material_price_override)
+    return quote_from_prices(design, base, material, count, enchants, retained_material=primary)
 
 
 def _number(text, default=0):
@@ -221,7 +229,7 @@ def custom_armor_profile(design):
     shield, heavy = is_shield(item), item["group"] == "Armaduras Pesadas"
     names = {base_name(name) for name in design.improvements}
     enchants = {base_name(name) for name in design.enchantments}
-    material = base_name(design.material)
+    materials = {base_name(m) for m in (design.material, design.second_material) if m}
     base_defense, base_penalty = _number(item["defense"]), _number(item["penalty"])
     defense = base_defense + ("Reforçada" in names) + (4 if "Guardião" in enchants else 2 if "Defensor" in enchants else 0)
     if shield:
@@ -233,9 +241,9 @@ def custom_armor_profile(design):
         penalty -= design.goblin_extra_spaces
     else:
         reduction = 2 if "Sob Medida" in names and design.fitted else 1 if "Ajustada" in names else 0
-        penalty = min(0, penalty + reduction + (2 if material == "Mitral" else 1 if material == "Casco de monstro" else 0))
+        penalty = min(0, penalty + reduction + (2 if "Mitral" in materials else 0) + (1 if "Casco de monstro" in materials else 0))
     base_spaces = money(item["spaces"])
-    spaces = max(min(base_spaces, Decimal(1)), base_spaces - ("Discreto" in names) - (material == "Mitral"))
+    spaces = max(min(base_spaces, Decimal(1)), base_spaces - ("Discreto" in names) - ("Mitral" in materials))
     rd, bonuses = {}, []
 
     def reduction(kind, value):
@@ -246,21 +254,21 @@ def custom_armor_profile(design):
     if base_name(item["name"]) == "Armadura de chumbo":
         reduction("mundano", 2)
         bonuses.append("Resistência a magia +2")
-    if material == "Adamante":
+    if "Adamante" in materials:
         reduction("geral", 5 if heavy else 2)
-    if material == "Gelo eterno":
+    if "Gelo eterno" in materials:
         reduction("fogo", 10 if heavy else 5)
-    if material == "Couraça de kaiju":
+    if "Couraça de kaiju" in materials:
         reduction("mágico", 20 if heavy else 10)
-    if material == "Couro de bulette":
+    if "Couro de bulette" in materials:
         reduction("ácido", 10 if heavy else 5)
-    if material == "Lanajuste":
+    if "Lanajuste" in materials:
         reduction("corte", 10 if heavy else 5)
-    if material == "Prata":
+    if "Prata" in materials:
         reduction("contra espíritos/mortos-vivos", 10 if heavy else 5)
-    if material == "Madeira Tollon":
+    if "Madeira Tollon" in materials:
         bonuses.append("Resistência a magia +2")
-    if material == "Matéria vermelha" and not design.red_matter_immune:
+    if "Matéria vermelha" in materials and not design.red_matter_immune:
         bonuses.append(f"Falha de ataques recebidos: {25 if heavy else 10}%")
     for enchant, kind in (("Abençoado", "trevas"), ("Cáustica", "ácido"), ("Gélido", "frio"),
                           ("Incandescente", "fogo"), ("Relampejante", "eletricidade"), ("Esmérico", "ácido")):
@@ -274,7 +282,7 @@ def custom_armor_profile(design):
         reduction("geral", 2 if shield else 5)
     if "Geomântico" in enchants:
         reduction("impacto", 10)
-    fortification = (50 if heavy else 25) if material == "Aço-rubi" else 0
+    fortification = (50 if heavy else 25) if "Aço-rubi" in materials else 0
     fortification += max((25 if shield else 50) if "Fortificado" in enchants else 0,
                         25 if "Geomântico" in enchants else 0)
     if fortification:
@@ -288,8 +296,8 @@ def custom_armor_profile(design):
         bonuses.append("Defesa +5 na primeira rodada em ambiente iluminado")
     if "Égide" in enchants:
         bonuses.append("Defesa +5 contra ataques à distância")
-    dex_limit = max(1 if heavy and "Delicada" in names else 0, 2 if heavy and material == "Mitral" else 0,
-                    1 if heavy and material == "Casco de monstro" else 0)
+    dex_limit = max(1 if heavy and "Delicada" in names else 0, 2 if heavy and "Mitral" in materials else 0,
+                    1 if heavy and "Casco de monstro" in materials else 0)
     if heavy:
         bonuses.append(f"Até {dex_limit} de Destreza na Defesa")
     if base_name(item["name"]) == "Broquel":
@@ -306,9 +314,10 @@ def custom_armor_profile(design):
         attack_base["damage"] = shift_damage(attack_base["damage"], attack_steps)
         # Materiais exclusivos de armaduras não ganham efeitos ofensivos inexistentes.
         attack_material = design.material if design.material in WEAPON_MATERIALS else ""
-        if material == "Cristal de sol":
+        if base_name(design.material) == "Cristal de sol":
             attack_material = ""  # O dano do escudo é de impacto, sem corte/perfuração.
-        attack_design = replace(design, material=attack_material, name=name, profile_index=0)
+        attack_second = design.second_material if design.second_material in WEAPON_MATERIALS and base_name(design.second_material) != "Cristal de sol" else ""
+        attack_design = replace(design, material=attack_material, second_material=attack_second, name=name, profile_index=0)
         profile = custom_weapon_profile(attack_design, weapon=attack_base,
                                         extra_magic_bonus=2 if "Esmagador" in enchants else 0)
         if design.ballistic_active and "Balístico" in names:

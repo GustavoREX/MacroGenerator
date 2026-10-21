@@ -354,7 +354,7 @@ class MacroBuilderApp(PreviewMixin):
         attr_frame = ttk.Frame(parent)
         attr_frame.pack(fill="x")
 
-        for name, code in ATTRIBUTES.items():
+        for name in ("Força", "Destreza", "Constituição"):
             if name == "Força":
                 skill_frame = ttk.Frame(attr_frame)
                 skill_frame.pack(fill="x", pady=2)
@@ -425,33 +425,6 @@ class MacroBuilderApp(PreviewMixin):
                 self.initiative_macro_gear_button.pack(side="left", padx=(4, 0))
                 self.update_initiative_macro_gear_style()
                 continue
-
-            if name == "Inteligência":
-                ttk.Separator(parent).pack(fill="x", pady=12)
-                ttk.Label(parent, text="Inventário", style="Section.TLabel").pack(
-                    anchor="w", pady=(0, 6))
-                inventory_frame = ttk.Frame(parent)
-                inventory_frame.pack(fill="x")
-                ttk.Button(inventory_frame, text="🗡️ Crie sua arma", command=self.open_weapon_workshop,
-                           padding=(4, 8)).pack(fill="x", pady=2)
-                continue
-
-            if name == "Sabedoria":
-                ttk.Button(inventory_frame, text="🛡 Crie sua Armadura", command=self.open_armor_workshop,
-                           padding=(4, 8)).pack(fill="x", pady=2)
-                continue
-
-            if name == "Carisma":
-                ttk.Button(inventory_frame, text="🛒 SHOPING", command=self.open_shopping,
-                           padding=(4, 8)).pack(fill="x", pady=2)
-                continue
-
-            ttk.Button(
-                inventory_frame,
-                text=name,
-                command=lambda c=code: self.insert_text(c),
-                padding=(4, 8),
-            ).pack(fill="x", pady=2)
 
     def create_scrollable_panel(
         self,
@@ -1736,7 +1709,7 @@ class MacroBuilderApp(PreviewMixin):
         from shopping_ui import ShoppingWorkshop
         if not hasattr(self, "shopping_workshop"):
             self.shopping_workshop = ShoppingWorkshop(self.parent, self, self.close_shopping)
-        for name in ("weapon_workshop", "armor_workshop"):
+        for name in ("weapon_workshop", "armor_workshop", "apothecary_workshop"):
             if hasattr(self, name):
                 getattr(self, name).pack_forget()
         self.page_viewport.pack_forget()
@@ -1749,10 +1722,31 @@ class MacroBuilderApp(PreviewMixin):
         self.shopping_workshop.pack_forget()
         self.page_viewport.pack(fill="both", expand=True)
 
+    def open_apothecary(self):
+        if hasattr(self.root, "show_tool"):
+            self.root.show_tool("apothecary")
+            return
+        from apothecary_ui import ApothecaryWorkshop
+        if not hasattr(self, "apothecary_workshop"):
+            self.apothecary_workshop = ApothecaryWorkshop(self.parent, self, self.close_apothecary)
+        for name in ("weapon_workshop", "armor_workshop", "shopping_workshop"):
+            if hasattr(self, name):
+                getattr(self, name).pack_forget()
+        self.page_viewport.pack_forget()
+        self.apothecary_workshop.pack(fill="both", expand=True)
+
+    def close_apothecary(self):
+        self.apothecary_workshop.pack_forget()
+        self.page_viewport.pack(fill="both", expand=True)
+
     def add_custom_to_inventory(self, design, base, quote, profile):
         from shopping_core import custom_item
         item = custom_item(design, base, quote, profile)
-        self.get_inventory().add(item)
+        self.add_inventory_item(item)
+        return item
+
+    def add_inventory_item(self, item, quantity=1):
+        self.get_inventory().add(item, quantity)
         for owner in (self, self.root):
             shopping = getattr(owner, "shopping_workshop", None)
             if shopping is not None:
