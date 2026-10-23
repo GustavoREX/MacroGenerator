@@ -19,7 +19,6 @@ class ApothecaryWorkshop(ttk.Frame):
         super().__init__(master, padding=12)
         header = ttk.Frame(self)
         header.pack(fill='x', pady=(0, 8))
-        ttk.Button(header, text='← Macro Generator', command=on_back).pack(side='right')
         ttk.Label(header, text='🍀 Boticário Arcano', style='Section.TLabel').pack(anchor='w')
         intro = ttk.Label(self, text='Poções incorporam aprimoramentos na fabricação. Pergaminhos guardam a magia básica; '
                   'os aprimoramentos são aplicados ao ler.', wraplength=1100)

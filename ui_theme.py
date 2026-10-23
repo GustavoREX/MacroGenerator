@@ -2,6 +2,12 @@
 
 
 def configure_theme(root, style):
+    # O Tk troca abas com a roda por padrão. Remova só esses atalhos da classe
+    # para alcançar também os notebooks criados depois, sem afetar o conteúdo.
+    for sequence in root.bind_class("TNotebook"):
+        if ("MouseWheel" in sequence or "TouchpadScroll" in sequence
+                or "Button-4" in sequence or "Button-5" in sequence):
+            root.unbind_class("TNotebook", sequence)
     background = "#eef2f8"
     surface = "#ffffff"
     ink = "#24324b"

@@ -12,6 +12,7 @@ from token_workspace import TokenWorkspace
 from ui_theme import set_responsive_window_geometry
 from home_screen import HomeScreen
 from interface_settings import InterfaceSettings, default_settings_path
+from forge_ui import InfoPopup
 
 APP_NAME = 'Macro x Token'
 DISPLAY_NAME = 'Macro Generator x TokenForge'
@@ -33,7 +34,7 @@ class App(TkinterDnD.Tk):
         except tk.TclError:
             pass
         self.active_tool = None
-        self.info_window = None
+        self.release_info = InfoPopup(self)
         self.header = tk.Frame(self, background='white', padx=16, pady=12)
         self.header.pack(fill='x')
         titles = tk.Frame(self.header, background='white')
@@ -53,10 +54,11 @@ class App(TkinterDnD.Tk):
         ttk.Label(metadata, text=VERSAO, style='Muted.TLabel').pack(side='left')
         self.info_button = tk.Button(metadata, text='ⓘ', font=('Segoe UI', 12),
                                     fg='#315ee7', bg='white', activebackground='#edf1f9',
-                                    relief='flat', borderwidth=0, cursor='hand2',
-                                    command=self.show_release_notes)
+                                    relief='flat', borderwidth=0, cursor='question_arrow')
         self.info_button.pack(side='left', padx=8)
         self.info_button.bind('<Enter>', self.show_release_notes)
+        self.info_button.bind('<Leave>', lambda _event: self.release_info.hide())
+        self.info_button.bind('<Unmap>', lambda _event: self.release_info.hide())
         self.home_button = tk.Button(metadata,text='⌂ Início',font=('Segoe UI',10,'bold'),
             fg='#315ee7',bg='white',activebackground='#edf1f9',relief='flat',bd=0,
             cursor='hand2',command=lambda: self.show_tool('home'))
@@ -95,6 +97,7 @@ class App(TkinterDnD.Tk):
     def show_tool(self, tool):
         if tool not in ('home', 'macro', 'token', 'weapons', 'armor', 'shopping', 'apothecary'):
             raise ValueError('Ferramenta desconhecida')
+        self.release_info.hide()
         self.home.pack_forget()
         self.macro_host.pack_forget()
         self.token_workspace.pack_forget()
@@ -142,24 +145,7 @@ class App(TkinterDnD.Tk):
         self.show_tool('macro')
 
     def show_release_notes(self, _event=None):
-        if self.info_window is not None and self.info_window.winfo_exists():
-            self.info_window.lift()
-            return
-        window = tk.Toplevel(self)
-        self.info_window = window
-        window.title(f'Atualizações · {VERSAO}')
-        window.transient(self)
-        window.resizable(False, False)
-        panel = ttk.Frame(window, padding=20)
-        panel.pack(fill='both', expand=True)
-        ttk.Label(panel, text=f'{DISPLAY_NAME}\n{VERSAO}', style='Section.TLabel').pack(anchor='w', pady=(0, 14))
-        ttk.Label(panel, text=RELEASE_NOTES, wraplength=380, justify='left').pack(anchor='w')
-        ttk.Button(panel, text='Fechar', command=window.destroy).pack(anchor='e', pady=(16, 0))
-        window.bind('<Escape>', lambda _: window.destroy())
-        window.update_idletasks()
-        x = min(self.winfo_rootx() + 20, self.winfo_screenwidth() - window.winfo_width() - 20)
-        y = min(self.winfo_rooty() + 80, self.winfo_screenheight() - window.winfo_height() - 40)
-        window.geometry(f'+{max(0, x)}+{max(0, y)}')
+        self.release_info.show(self.info_button, f'{DISPLAY_NAME}\n{VERSAO}', RELEASE_NOTES)
 
 
 def main():

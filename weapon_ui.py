@@ -11,6 +11,7 @@ class WeaponInfoPopup:
         self.owner = owner
         self.popup = None
         self.icon = None
+        self.hover_bounds = None
         self.hide_job = None
         owner.bind("<Destroy>", self._owner_destroyed, add="+")
         owner.bind("<Unmap>", self._owner_unmapped, add="+")
@@ -42,6 +43,7 @@ class WeaponInfoPopup:
             self.popup.destroy()
             self.popup = None
         self.icon = None
+        self.hover_bounds = None
 
     def schedule_hide(self, _event=None):
         self.cancel_hide()
@@ -52,17 +54,20 @@ class WeaponInfoPopup:
         x, y = self.owner.winfo_pointerxy()
         for widget in (self.icon, self.popup):
             if widget is not None and widget.winfo_exists():
-                if (widget.winfo_rootx() <= x < widget.winfo_rootx() + widget.winfo_width()
-                        and widget.winfo_rooty() <= y < widget.winfo_rooty() + widget.winfo_height()):
+                left, top, width, height = (self.hover_bounds
+                    if widget is self.icon and self.hover_bounds is not None else
+                    (widget.winfo_rootx(), widget.winfo_rooty(), widget.winfo_width(), widget.winfo_height()))
+                if left <= x < left + width and top <= y < top + height:
                     return
         self.hide()
 
-    def show(self, icon, weapon):
+    def show(self, icon, weapon, *, hover_bounds=None):
         self.cancel_hide()
         if self.icon == icon and self.popup is not None:
             return
         self.hide()
         self.icon = icon
+        self.hover_bounds = hover_bounds
         popup = self.popup = tk.Toplevel(self.owner)
         popup.withdraw()
         popup.wm_overrideredirect(True)

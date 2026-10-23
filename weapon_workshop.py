@@ -44,7 +44,6 @@ class WeaponWorkshop(ttk.Frame):
         self.bind("<Unmap>", lambda event: self.info.hide() if event.widget == self else None)
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 8))
-        ttk.Button(header, text="← Macro Generator", command=on_back).pack(side="right")
         ttk.Label(header, text=self.workshop_title, style="Section.TLabel").pack(anchor="w")
         self.intro_label = ttk.Label(self, text="Monte a configuração final, incluindo os efeitos que o item já possui. "
                   "Materiais contam como uma melhoria.", wraplength=900)
@@ -233,28 +232,26 @@ class WeaponWorkshop(ttk.Frame):
                 var.trace_add('write',self.schedule_refresh)
             field("Inovações que o item já possui",self.old_innovations_var,tuple(range(5)))
             self.old_innovations_var.trace_add('write',self.schedule_refresh)
-        # O resumo e a ação continuam acessíveis mesmo quando as listas são longas.
-        footer = ttk.Frame(self, padding=(0, 8, 0, 0))
+        # Os cartões concentram o orçamento; o rodapé reserva só uma linha às ações.
+        footer = self.footer = ttk.Frame(self, padding=(0, 8, 0, 0))
         footer.pack(side='bottom', fill="x", before=self.body)
-        footer_details = ttk.Frame(footer)
-        footer_details.pack(fill='x')
-        self.summary_var = tk.StringVar(self)
-        self.details_var = tk.StringVar(self)
+        footer.columnconfigure(0, weight=1)
         self.error_var = tk.StringVar(self)
-        self.summary_label = ttk.Label(footer_details, textvariable=self.summary_var, style="Section.TLabel", wraplength=1100)
-        self.summary_label.pack(anchor="w")
-        self.details_label = ttk.Label(footer_details, textvariable=self.details_var, wraplength=1100)
-        self.details_label.pack(anchor="w", pady=(3, 0))
-        self.error_label = ttk.Label(footer_details, textvariable=self.error_var, foreground="#b3261e", wraplength=1100)
-        self.error_label.pack(anchor="w", pady=(3, 0))
-        self.generate_button = ttk.Button(footer, text="Gerar macro de arma", style="Primary.TButton",
+        self.error_label = ttk.Label(footer, textvariable=self.error_var, foreground="#b3261e", wraplength=1100)
+        self.error_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.error_label.grid_remove()
+        actions = ttk.Frame(footer)
+        actions.grid(row=1, column=0, sticky="e")
+        self.generate_button = ttk.Button(actions, text="Gerar macro de arma", style="Primary.TButton",
                                           command=self.generate)
-        self.generate_button.pack(anchor="e", pady=(6, 0))
-        self.inventory_button = ttk.Button(footer, text="Adicionar no inventário", command=self.add_to_inventory)
-        self.inventory_button.pack(anchor="e", pady=(6, 0))
+        self.generate_button.grid(row=0, column=0, padx=(0, 8))
+        self.inventory_button = ttk.Button(actions, text="Adicionar no inventário", command=self.add_to_inventory)
+        self.inventory_button.grid(row=0, column=1)
         self.inventory_status_var = tk.StringVar(self)
         self.inventory_status_label = ttk.Label(footer, textvariable=self.inventory_status_var, wraplength=1100)
-        self.inventory_status_label.pack(anchor="w", pady=(3, 0))
+        self.inventory_status_label.grid(row=2, column=0, sticky="w", pady=(3, 0))
+        self.inventory_status_label.grid_remove()
+        self.inventory_status_var.trace_add("write", self._update_inventory_status)
         self.bind("<Configure>", self._resize_footer, add="+")
         variables = (self.profile_var, self.name_var, self.size_var, self.construction_var,
                      self.base_price_var, self.material_price_var, self.damage_var, self.owned_var,
@@ -272,8 +269,14 @@ class WeaponWorkshop(ttk.Frame):
     def _resize_footer(self, event):
         if event.widget == self:
             self.intro_label.configure(wraplength=max(240,event.width-36))
-            for label in (self.summary_label, self.details_label, self.error_label, self.inventory_status_label):
+            for label in (self.error_label, self.inventory_status_label):
                 label.configure(wraplength=max(240, event.width - 36))
+
+    def _update_inventory_status(self, *_args):
+        if self.inventory_status_var.get():
+            self.inventory_status_label.grid()
+        else:
+            self.inventory_status_label.grid_remove()
 
     def _filter_weapons(self, *_args):
         query = search_key(self.weapon_search_var.get())
@@ -462,15 +465,6 @@ class WeaponWorkshop(ttk.Frame):
         try:
             design = self.get_design()
             quote = self.quote_design(design)
-            self.summary_var.set(f"Preço final: {format_money(quote.total_price)}  ·  "
-                                 f"A pagar agora: {format_money(quote.due_now)}")
-            self.details_var.set(
-                f"Base: {format_money(quote.base_price)} · Melhorias {quote.improvement_count}/{5 if self.genius_var.get() else 4}: "
-                f"{format_money(quote.improvement_price)} · Material: {format_money(quote.material_price)} · "
-                f"Encantos {quote.enchantment_count}/3: {format_money(quote.enchantment_price)}\n"
-                f"A pagar em melhorias: {format_money(quote.improvement_due)}; "
-                f"encantos: {format_money(quote.enchantment_due)}; material: {format_money(quote.material_due)}. "
-                + (f"CD de melhorias +{quote.improvement_dc}; CD de encantamentos +{quote.enchantment_dc}." if self.fabricate_var.get() else ''))
             profile = self.build_profile(design)
             self.result_profile = profile
             stats, effects = self.purchase_details(design, profile, weapon)
@@ -481,36 +475,21 @@ class WeaponWorkshop(ttk.Frame):
                 self.forge_cards.show_quote(self.fabrication_quote)
                 self.forge_cards.set_characteristics(stats, effects,
                     stats_hint='Bônus do item; acrescente os valores da ficha ao usar.')
-                self.summary_var.set(f'Fabricando · A pagar agora: {format_money(self.fabrication_quote.cost)} · '
-                                     f'Valor de referência do item pronto: {format_money(quote.total_price)}')
                 self.fabrication_var.set('\n'.join(self.fabrication_quote.notes))
             else:
                 self.forge_cards.show_purchase(None if quote.innovation_count else quote.due_now, stats, effects,
                     price_hint=('Inovações sem valor comercial' if quote.innovation_count else
                                 f'A pagar pelas alterações · Item completo: {format_money(quote.total_price)}' if design.owned else 'Item pronto · Valor por unidade'),
                     stats_hint='Bônus do item; acrescente os valores da ficha ao usar.')
-            if quote.innovation_count:
-                self.details_var.set(self.details_var.get()+f'\nInovações {quote.innovation_count}/4: {format_money(quote.innovation_price)}'+
-                    (f' · CD +{quote.innovation_dc}.' if self.fabricate_var.get() else '.')+' Sem valor comercial; valor de referência do projeto.')
-                if not self.fabricate_var.get():
-                    self.summary_var.set('Inovações sem valor comercial · Selecione Fabricando para orçar o projeto.')
-            self.error_var.set(self.profile_summary(profile))
-            self.error_label.configure(foreground="#174a75")
+            self.error_var.set("")
         except (ValueError, KeyError) as error:
             self.result_profile = None
             self.forge_cards.clear()
             self.error_var.set(str(error))
-            self.error_label.configure(foreground="#b3261e")
-            # Um erro de fabricação também deve limpar os valores de compra anteriores.
-            self.summary_var.set("Confira a configuração do item.")
-            self.details_var.set("")
-        for label in (self.summary_label, self.details_label, self.error_label):
-            label.pack_forget()
-        if not self.fabricate_var.get():
-            self.summary_label.pack(anchor='w')
-            self.details_label.pack(anchor='w', pady=(3,0))
-        if not self.fabricate_var.get() or self.result_profile is None:
-            self.error_label.pack(anchor='w', pady=(3,0))
+        if self.result_profile is None:
+            self.error_label.grid()
+        else:
+            self.error_label.grid_remove()
         self.update_actions()
 
     def generate(self):

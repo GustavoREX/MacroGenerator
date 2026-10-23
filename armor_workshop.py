@@ -89,9 +89,9 @@ class ArmorWorkshop(WeaponWorkshop):
         item = self.items[self.weapon_var.get()]
         attack = item["group"] == "Escudos" and base_name(item["name"]) not in ("Escudo de vime", "Escudo torre")
         if attack:
-            self.generate_button.pack(anchor="e", pady=(6, 0))
+            self.generate_button.grid()
         else:
-            self.generate_button.pack_forget()
+            self.generate_button.grid_remove()
         for label in ("Tamanho / passos de dano", "Lancinante: efeito escolhido no crítico"):
             self.form_fields[label].configure(state="readonly" if attack else "disabled")
         self.form_fields["Dano final manual (opcional; substitui os passos)"].configure(
